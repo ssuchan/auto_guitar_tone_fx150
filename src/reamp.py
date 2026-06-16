@@ -35,10 +35,11 @@ def open_fx150_hid():
 class ReampEvaluator:
     """후보 -> tone_distance. 하드웨어 리앰프 루프."""
 
-    def __init__(self, di_wav, target_wav, play_device, settle=0.15):
+    def __init__(self, di_wav, target_wav, play_device, settle=0.15, play_gain=1.0):
         self.di, self.di_sr = sf.read(di_wav, dtype="float32")
         if self.di.ndim > 1:
             self.di = self.di.mean(axis=1)
+        self.play_gain = play_gain
         self.target_feat = features(target_wav)
         self.play_device = play_device
         self.settle = settle
@@ -49,13 +50,16 @@ class ReampEvaluator:
         self.cap_sr = int(self.cap_info["default_samplerate"])
         self.cap_ch = self.cap_info["max_input_channels"]
         self.h = open_fx150_hid()
+        self.best_loss = float("inf")    # 최적 후보의 녹음 보존 (P4)
+        self.best_rec = None
 
     def reamp(self):
         """DI 재생 + FX150 캡처 동시. 처리된 오디오 반환."""
         dur = len(self.di) / self.di_sr
+        out = np.clip(self.di * self.play_gain, -1.0, 1.0)   # 게인 + 클리핑 가드 (P5)
         rec = sd.rec(int(self.cap_sr * (dur + 0.3)), samplerate=self.cap_sr,
                      channels=self.cap_ch, dtype="float32", device=self.cap_idx)
-        sd.play(self.di, samplerate=self.di_sr, device=self.play_device)
+        sd.play(out, samplerate=self.di_sr, device=self.play_device)
         sd.wait()
         return np.asarray(rec), self.cap_sr
 
@@ -63,7 +67,20 @@ class ReampEvaluator:
         apply_candidate(self.h, candidate)
         time.sleep(self.settle)          # 파라미터 반영 대기
         rec, sr = self.reamp()
-        return tone_distance(self.target_feat, rec, sr_b=sr)
+        loss = tone_distance(self.target_feat, rec, sr_b=sr)
+        if loss < self.best_loss:
+            self.best_loss = loss
+            self.best_rec = (rec, sr)
+        return loss
+
+    def save_best(self, path):
+        """최적 후보의 처리음 녹음을 wav로 저장 (귀로 결과 확인용)."""
+        if self.best_rec is None:
+            return None
+        rec, sr = self.best_rec
+        mono = rec.mean(axis=1) if rec.ndim > 1 else rec
+        sf.write(path, mono, sr)
+        return path
 
     def close(self):
         self.h.close()

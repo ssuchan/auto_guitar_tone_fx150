@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--target", help="타겟 기타 wav (fetch_separate 산출)")
     ap.add_argument("--play-device", type=int, help="라인아웃 장치 인덱스")
     ap.add_argument("--trials", type=int, default=150)
+    ap.add_argument("--play-gain", type=float, default=1.0,
+                    help="DI 재생 게인 (FX150 입력 클리핑 시 1.0 미만으로)")
     ap.add_argument("--mock", action="store_true",
                     help="하드웨어 없이 글루/로그/저장만 점검 (장비 미적용)")
     args = ap.parse_args()
@@ -67,7 +69,8 @@ def main():
         if not (args.di and args.target and args.play_device is not None):
             ap.error("--di, --target, --play-device 필요 (또는 --mock)")
         from reamp import ReampEvaluator
-        ev = ReampEvaluator(args.di, args.target, args.play_device)
+        ev = ReampEvaluator(args.di, args.target, args.play_device,
+                            play_gain=args.play_gain)
 
     try:
         n_coarse = max(1, args.trials // 3)   # 1/3 모델탐색, 2/3 파라미터 미세조정
@@ -78,6 +81,9 @@ def main():
         print(describe(best))
         print(f"\n결과 저장 -> {path}")
         if ev.h is not None:
+            wav = ev.save_best(os.path.join(WORK, "best_reamp.wav"))
+            if wav:
+                print(f"최적 처리음 녹음 -> {wav}")
             apply_candidate(ev.h, best)   # 최적 후보를 장비에 적용(듣고 저장하도록)
             print("장비에 적용됨. 마음에 들면 FX150/에디터에서 저장하세요.")
         else:
