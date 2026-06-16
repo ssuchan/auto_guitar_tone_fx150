@@ -71,19 +71,30 @@ vs 0.0035(재생), 사실상 무변화. USB 재생이 DSP 우회함을 깨끗이
 - [x] Phase 6: Optuna TPE 최적화 루프 (optimizer.py) — mock 평가자로 수렴 검증
 - [x] 후보→장비 인코더 (apply_preset.py) — 캡처 AMP/FX 프레임 정확 재구성, 사람이 읽는 출력
 - [x] 엔드투엔드 글루 (main.py)
+- [x] DI 녹음 도구 (di_record.py) — FX150 캡처서 클린 기타 녹음, 스모크 테스트 통과
+- [x] USB 리앰프 가능성 정밀 검증 (reamp_probe.py) — 단일 풀듀플렉스+톤검출, 불가 확정
 - [~] Phase 5: 아날로그 리앰프 평가자 (reamp.py) — 코드 완성, **케이블 연결 후 실측 필요**
 
 ## 사용법 (실행 전 준비)
-1. 케이블: PC 라인아웃 → FX150 기타 입력잭 (DI 리앰프용)
-   - **FX150 USB OUTPUT 설정 = "이펙팅(effected)" 시그널** (매뉴얼 43p: 드라이/이펙팅 선택 가능).
-     드라이로 두면 생기타만 캡처돼 비교 무의미. PC 출력 볼륨은 낮게(클리핑/임피던스 방지).
-   - 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가.
-2. DI 녹음: 내 기타 클린 연주 wav
-3. `python fetch_separate.py URL [start] [dur]` → work/target_guitar.wav (첫 실행 Demucs 모델 다운로드)
-4. `python devices.py`로 라인아웃 장치 인덱스 확인
-5. FLAMMA 에디터 닫기 (HID 점유 충돌 방지)
-6. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N --trials 150`
-7. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
+FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 시간차로 번갈아 꽂는다.
+
+**A단계: DI 녹음 (기타 사용, 1회)**
+1. 기타를 FX150 기타 입력잭에 꽂기
+2. FX150 USB OUTPUT = **"드라이(dry)"** 설정 (생기타 녹음)
+3. `python di_record.py my_di.wav 15` → 클린 연주 15초 녹음
+
+**B단계: 타겟 확보**
+4. `python fetch_separate.py URL [start] [dur]` → work/target_guitar.wav (첫 실행 Demucs 모델 다운로드)
+
+**C단계: 자동 리앰프 루프 (기타 빼고 케이블)**
+5. 기타 빼고, 케이블: PC 라인아웃 → FX150 기타 입력잭
+6. FX150 USB OUTPUT = **"이펙팅(effected)"** 설정 (매뉴얼 43p). 드라이면 처리음 안 잡힘.
+   PC 출력 볼륨 낮게(클리핑/임피던스 방지).
+7. `python devices.py`로 라인아웃 장치 인덱스 확인 / FLAMMA 에디터 닫기(HID 충돌 방지)
+8. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N --trials 150`
+9. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
+
+참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
 
 ## 남은 실측/튜닝 (하드웨어 연결 후)
 - reamp.py 경로 실측: DI 재생→FX150 처리→USB 캡처 동작 확인
