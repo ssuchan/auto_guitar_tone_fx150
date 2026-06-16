@@ -7,7 +7,7 @@
 출력: 최적 설정을 FX150에 적용 + 사람이 읽는 설정 출력. 사용자가 장비에서 수동 저장.
 """
 import argparse
-from optimizer import optimize
+from optimizer import staged_optimize
 from reamp import ReampEvaluator
 from apply_preset import apply_candidate, describe
 
@@ -35,7 +35,9 @@ def main():
 
     ev = ReampEvaluator(args.di, args.target, args.play_device)
     try:
-        study, best = optimize(ev, DEFAULT_CHAINS, n_trials=args.trials)
+        n_coarse = max(1, args.trials // 3)   # 1/3 모델탐색, 2/3 파라미터 미세조정
+        study, best = staged_optimize(ev, DEFAULT_CHAINS,
+                                      n_coarse=n_coarse, n_fine=args.trials - n_coarse)
         print(f"\n=== best loss = {study.best_value:.4f} ===")
         # 최적 후보를 장비에 적용한 상태로 둠 (사용자가 듣고 저장)
         apply_candidate(ev.h, best)
