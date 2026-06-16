@@ -8,6 +8,7 @@
 payload = enable(LE16) + model(LE16) + param_i(LE16)... 단, 에디터는 payload 끝의
 trailing 0x00 한 바이트를 생략한다 (캡처 AMP/FX 프레임으로 검증). 동일 포맷으로 재현.
 """
+import time
 from fx150_protocol import build_frame, build_report
 from fx150_spec import load_spec, CHAIN_CMD
 
@@ -34,11 +35,18 @@ def encode_report(chain, enable, model, params):
     return build_report(CHAIN_CMD[chain], _payload(enable, model, params))
 
 
-def apply_candidate(h, candidate):
-    """열린 HID 핸들 h에 후보 전체를 전송."""
-    for chain, m in candidate.items():
+def apply_candidate(h, candidate, delay=0.5):
+    """열린 HID 핸들 h에 후보 전체를 전송.
+
+    모듈 사이 delay초 간격. 빈/일반 프리셋에 model 로드 시 연사하면 장치가
+    프레임을 드롭함(실장비 확인: 0.6s×6모듈 실패, 1.0s 성공). 기본 0.5s 보수적.
+    """
+    items = list(candidate.items())
+    for i, (chain, m) in enumerate(items):
         report = encode_report(chain, m.get("enable", 1), m["model"], m["params"])
         h.write(report)
+        if delay and i < len(items) - 1:
+            time.sleep(delay)
 
 
 def _phys(p, v):

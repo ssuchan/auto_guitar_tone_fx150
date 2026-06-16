@@ -35,11 +35,13 @@ def open_fx150_hid():
 class ReampEvaluator:
     """후보 -> tone_distance. 하드웨어 리앰프 루프."""
 
-    def __init__(self, di_wav, target_wav, play_device, settle=0.15, play_gain=1.0):
+    def __init__(self, di_wav, target_wav, play_device, settle=0.15, play_gain=1.0,
+                 apply_delay=0.5):
         self.di, self.di_sr = sf.read(di_wav, dtype="float32")
         if self.di.ndim > 1:
             self.di = self.di.mean(axis=1)
         self.play_gain = play_gain
+        self.apply_delay = apply_delay
         self.target_feat = features(target_wav)
         self.play_device = play_device
         self.settle = settle
@@ -64,7 +66,7 @@ class ReampEvaluator:
         return np.asarray(rec), self.cap_sr
 
     def __call__(self, candidate):
-        apply_candidate(self.h, candidate)
+        apply_candidate(self.h, candidate, delay=self.apply_delay)
         time.sleep(self.settle)          # 파라미터 반영 대기
         rec, sr = self.reamp()
         loss = tone_distance(self.target_feat, rec, sr_b=sr)

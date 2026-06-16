@@ -66,10 +66,11 @@ vs 0.0035(재생), 사실상 무변화. USB 재생이 DSP 우회함을 깨끗이
   - [x] 실제 전송 검증: cycle82 전송 시 FX150 화면이 모듈 슬롯 이동 → write 반영 확인
   - [x] 파라미터 맵 확보: exe의 zlib 리소스에서 preset.xml 추출 (extract_qrc.py → spec/preset.xml)
   - [x] 스펙 파서 + cmd↔체인 매핑 (fx150_spec.py). 0x93=AMP 6파라미터 캡처 일치로 검증
-  - [x] **라이브 풀 검증 (2026-06-16)**: 일반 프리셋 로드 후 0x93 전송 → AMP 모델이
-        'US 65 DR'로 바뀌고 GAIN=25 정확 반영. enable/model선택/파라미터쓰기 + 끝 0x00
-        트림 휴리스틱 모두 실장비 확인. apply_preset 경로 신뢰 확보.
-        주의: **빈 프리셋엔 model 선택 안 됨**(슬롯에 모델 無) → 일반 프리셋 로드 후 시작.
+  - [x] **라이브 풀 검증 (2026-06-16)**: 0x93 전송 → AMP 모델 변경 + GAIN 정확 반영.
+        enable/model선택/파라미터쓰기 + 끝 0x00 트림 휴리스틱 모두 실장비 확인.
+        **빈 프리셋에 7모듈 풀 톤(BRIT PLEXI LEAD) 빌드 성공** — 빈 프리셋도 model 로드 됨.
+        단 **모듈 간 간격 필수**: 연사(0.6s×6모듈)는 모델 로드 드롭, 1.0s 간격은 성공.
+        → apply_candidate에 delay(기본 0.5s) 추가. main --apply-delay로 조절.
         장치는 물리노브 조작 시 host로 입력리포트 안 보냄(이전 추정 정정, hidapi read 0건).
 - [x] Phase 3: 유튜브 다운로드 + Demucs 분리 (fetch_separate.py) — 실URL 검증 완료 (35s Short → other stem 20s 추출). Demucs 파이썬 API 사용(CLI 저장은 torchcodec 의존으로 깨짐), KMP_DUPLICATE_LIB_OK로 Anaconda OpenMP 충돌 회피
 - [x] Phase 4: perceptual loss (tone_loss.py) — 합성신호 검증: 동일0/음색차<밝기차<왜곡차 순서 정확
@@ -95,7 +96,7 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
 5. 기타 빼고, 케이블: PC 라인아웃 → FX150 기타 입력잭
 6. FX150 USB OUTPUT = **"이펙팅(effected)"** 설정 (매뉴얼 43p). 드라이면 처리음 안 잡힘.
    PC 출력 볼륨 낮게(클리핑/임피던스 방지).
-   - **앰프 든 일반 프리셋 로드 후 시작** (빈 프리셋은 HID model 선택이 안 먹음, 라이브 검증됨).
+   - 프리셋은 빈 것/일반 것 아무거나 OK (빈 프리셋에도 model 로드 됨, 라이브 검증).
 7. `python devices.py`로 라인아웃 장치 인덱스 확인 / FLAMMA 에디터 닫기(HID 충돌 방지)
    - **장치 인덱스는 USB 연결 상태에 따라 바뀜** — 케이블 꽂은 상태에서 확인할 것.
    - 사전점검: `python preflight.py --di my_di.wav --target work/target_guitar.wav --play-device N`
