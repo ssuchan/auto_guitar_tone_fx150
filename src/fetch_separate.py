@@ -4,15 +4,18 @@
 
 - yt-dlp로 오디오 추출 (wav)
 - 선택 구간 잘라냄 (보컬/드럼 적은 기타 구간 고르면 분리 품질 ↑)
-- Demucs(htdemucs)로 분리 → 일렉기타는 'other' stem에 주로 존재
-  (Demucs는 기타 전용 stem 없음 — other = 보컬/드럼/베이스 제외 나머지)
+- Demucs(htdemucs) 파이썬 API로 분리 → 일렉기타는 'other' stem에 주로 존재
+  (Demucs는 기타 전용 stem 없음 — other = 드럼/베이스/보컬 제외 나머지)
 - 출력: work/target_guitar.wav
 
 주의: 첫 실행 시 Demucs 모델(~수백MB) 자동 다운로드, CPU 분리는 곡당 수 분.
 """
 import os
+# Anaconda OpenMP 중복 라이브러리(libiomp5md) 충돌 회피. torch/demucs import 전에 설정.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import sys
 import subprocess
+import numpy as np
 import soundfile as sf
 import librosa
 
@@ -35,15 +38,27 @@ def trim(in_wav, out_wav, start, dur):
     sf.write(out_wav, y, SR)
 
 
-def separate(in_wav, out_dir):
-    # demucs CLI: other stem 추출
-    subprocess.run([sys.executable, "-m", "demucs", "--two-stems", "vocals",
-                    "-o", out_dir, in_wav], check=True)
-    # --two-stems vocals -> {track}/no_vocals.wav (보컬 제거 = 기타+드럼+베이스)
-    # 기타만 더 원하면 4-stem 후 other 사용. 여기선 no_vocals를 1차 타겟으로.
-    base = os.path.splitext(os.path.basename(in_wav))[0]
-    cand = os.path.join(out_dir, "htdemucs", base, "no_vocals.wav")
-    return cand
+def separate(in_wav):
+    """htdemucs로 분리 → 'other'(기타 위주) stem을 모노 float 배열로 반환.
+
+    demucs 파이썬 API 사용 (CLI 저장 경로는 torchaudio/torchcodec 의존으로 깨짐).
+    """
+    import torch
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+
+    model = get_model("htdemucs"); model.eval()
+    y, _ = librosa.load(in_wav, sr=model.samplerate, mono=False)
+    if y.ndim == 1:                       # 모노 -> 스테레오 복제 (모델은 2채널 기대)
+        y = np.stack([y, y])
+    wav = torch.tensor(y, dtype=torch.float32).unsqueeze(0)  # (1, ch, samples)
+    ref = wav.mean(dim=(1, 2), keepdim=True)
+    std = wav.std(dim=(1, 2), keepdim=True) + 1e-8
+    with torch.no_grad():
+        sources = apply_model(model, (wav - ref) / std, device="cpu")[0]
+    sources = sources * std[0] + ref[0]
+    other = sources[model.sources.index("other")]
+    return other.mean(0).numpy()          # 모노화
 
 
 def main():
@@ -58,10 +73,9 @@ def main():
     trimmed = os.path.join(WORK, "trimmed.wav")
     print("1) 다운로드..."); download_audio(url, raw)
     print("2) 구간 컷..."); trim(raw, trimmed, start, dur)
-    print("3) 분리(시간 소요)..."); stem = separate(trimmed, WORK)
+    print("3) 분리(시간 소요)..."); guitar = separate(trimmed)
     target = os.path.join(WORK, "target_guitar.wav")
-    y, _ = librosa.load(stem, sr=SR, mono=True)
-    sf.write(target, y, SR)
+    sf.write(target, guitar, SR)
     print(f"완료 -> {target}")
 
 
