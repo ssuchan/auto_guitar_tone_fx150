@@ -66,6 +66,11 @@ vs 0.0035(재생), 사실상 무변화. USB 재생이 DSP 우회함을 깨끗이
   - [x] 실제 전송 검증: cycle82 전송 시 FX150 화면이 모듈 슬롯 이동 → write 반영 확인
   - [x] 파라미터 맵 확보: exe의 zlib 리소스에서 preset.xml 추출 (extract_qrc.py → spec/preset.xml)
   - [x] 스펙 파서 + cmd↔체인 매핑 (fx150_spec.py). 0x93=AMP 6파라미터 캡처 일치로 검증
+  - [x] **라이브 풀 검증 (2026-06-16)**: 일반 프리셋 로드 후 0x93 전송 → AMP 모델이
+        'US 65 DR'로 바뀌고 GAIN=25 정확 반영. enable/model선택/파라미터쓰기 + 끝 0x00
+        트림 휴리스틱 모두 실장비 확인. apply_preset 경로 신뢰 확보.
+        주의: **빈 프리셋엔 model 선택 안 됨**(슬롯에 모델 無) → 일반 프리셋 로드 후 시작.
+        장치는 물리노브 조작 시 host로 입력리포트 안 보냄(이전 추정 정정, hidapi read 0건).
 - [x] Phase 3: 유튜브 다운로드 + Demucs 분리 (fetch_separate.py) — 실URL 검증 완료 (35s Short → other stem 20s 추출). Demucs 파이썬 API 사용(CLI 저장은 torchcodec 의존으로 깨짐), KMP_DUPLICATE_LIB_OK로 Anaconda OpenMP 충돌 회피
 - [x] Phase 4: perceptual loss (tone_loss.py) — 합성신호 검증: 동일0/음색차<밝기차<왜곡차 순서 정확
 - [x] Phase 6: Optuna TPE 최적화 루프 (optimizer.py) — mock 평가자로 수렴 검증
@@ -90,6 +95,7 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
 5. 기타 빼고, 케이블: PC 라인아웃 → FX150 기타 입력잭
 6. FX150 USB OUTPUT = **"이펙팅(effected)"** 설정 (매뉴얼 43p). 드라이면 처리음 안 잡힘.
    PC 출력 볼륨 낮게(클리핑/임피던스 방지).
+   - **앰프 든 일반 프리셋 로드 후 시작** (빈 프리셋은 HID model 선택이 안 먹음, 라이브 검증됨).
 7. `python devices.py`로 라인아웃 장치 인덱스 확인 / FLAMMA 에디터 닫기(HID 충돌 방지)
    - **장치 인덱스는 USB 연결 상태에 따라 바뀜** — 케이블 꽂은 상태에서 확인할 것.
    - 사전점검: `python preflight.py --di my_di.wav --target work/target_guitar.wav --play-device N`
@@ -104,10 +110,12 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
 
 ## 남은 실측/튜닝 (하드웨어 연결 후)
-- reamp.py 경로 실측: DI 재생→FX150 처리→USB 캡처 동작 확인
+- reamp.py 경로 실측: DI 재생→FX150 처리→USB 캡처 동작 확인 (케이블 대기)
 - loss 가중치 튜닝 (실제 기타 톤쌍으로)
 - ~~단계형 최적화(거친 모델탐색→미세 노브) 도입~~ 완료(optimizer.staged_optimize). mock 벤치 flat 74→staged 59. 실톤쌍으로 n_coarse/n_fine 비율 튜닝은 잔여
-- payload 파라미터 스케일링(역방향 범위 HI CUT 등) 실측 보정
+- ~~apply_preset 끝 0x00 트림 휴리스틱 검증~~ 라이브 확인됨 (AMP GAIN=25 정확 반영)
+- payload 파라미터 스케일링(역방향 범위 HI CUT 등) 실측 보정 — 일부만 검증, 잔여
+- 최적화 시작 전 일반 프리셋 로드 자동화(또는 안내) — 빈 프리셋 model 선택 불가
 
 ### 체인 ↔ HID cmd 맵 (Phase 2 산출물)
 0x82 = 시그널 체인 슬롯 선택(화면 이동). 0x91~0x9a = 각 체인 모듈 파라미터:
