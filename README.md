@@ -75,6 +75,9 @@ vs 0.0035(재생), 사실상 무변화. USB 재생이 DSP 우회함을 깨끗이
 
 ## 사용법 (실행 전 준비)
 1. 케이블: PC 라인아웃 → FX150 기타 입력잭 (DI 리앰프용)
+   - **FX150 USB OUTPUT 설정 = "이펙팅(effected)" 시그널** (매뉴얼 43p: 드라이/이펙팅 선택 가능).
+     드라이로 두면 생기타만 캡처돼 비교 무의미. PC 출력 볼륨은 낮게(클리핑/임피던스 방지).
+   - 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가.
 2. DI 녹음: 내 기타 클린 연주 wav
 3. `python fetch_separate.py URL [start] [dur]` → work/target_guitar.wav (첫 실행 Demucs 모델 다운로드)
 4. `python devices.py`로 라인아웃 장치 인덱스 확인

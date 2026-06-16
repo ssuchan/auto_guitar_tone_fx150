@@ -8,6 +8,9 @@ venv/
 work/
 *.wav
 
+# 대용량 reference (장비 매뉴얼 등)
+*.pdf
+
 # OS
 Thumbs.db
 .DS_Store
