@@ -42,8 +42,12 @@ def suggest(trial, chains_config):
     return cand
 
 
-def _run_study(evaluator, chains_config, n_trials, seed, enqueue=None):
-    """단일 Optuna study 실행. enqueue=초기 시도로 넣을 파라미터 dict(선택)."""
+def _run_study(evaluator, chains_config, n_trials, seed, enqueue=None,
+               progress=False, label=""):
+    """단일 Optuna study 실행. enqueue=초기 시도로 넣을 파라미터 dict(선택).
+
+    progress=True면 trial마다 현재/최적 loss를 출력 (하드웨어 루프 진행 가시화).
+    """
     study = optuna.create_study(direction="minimize",
                                 sampler=optuna.samplers.TPESampler(seed=seed))
     if enqueue:
@@ -54,17 +58,23 @@ def _run_study(evaluator, chains_config, n_trials, seed, enqueue=None):
         trial.set_user_attr("candidate", cand)
         return evaluator(cand)
 
-    study.optimize(objective, n_trials=n_trials)
+    def _cb(st, tr):
+        if progress and tr.value is not None:
+            print(f"  {label}trial {tr.number + 1}/{n_trials} "
+                  f"loss={tr.value:.4f} best={st.best_value:.4f}", flush=True)
+
+    study.optimize(objective, n_trials=n_trials, callbacks=[_cb] if progress else None)
     best_cand = study.best_trial.user_attrs["candidate"]
     return study, best_cand
 
 
-def optimize(evaluator, chains_config, n_trials=100, seed=0):
+def optimize(evaluator, chains_config, n_trials=100, seed=0, progress=False):
     """evaluator(candidate)->float(작을수록 좋음). best (study, candidate) 반환."""
-    return _run_study(evaluator, chains_config, n_trials, seed)
+    return _run_study(evaluator, chains_config, n_trials, seed, progress=progress)
 
 
-def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0):
+def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
+                    progress=False):
     """2단계 최적화: 거친 모델탐색 → 모델 고정 후 파라미터 미세조정.
 
     flat TPE는 AMP 58/CAB 80처럼 큰 모델 집합 + 파라미터를 동시 샘플링해 비효율적.
@@ -72,7 +82,10 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0):
     Stage B: optimize 체인을 A의 최적 모델로 고정 → 파라미터만 깊게 탐색.
     더 나은 (study, candidate) 반환.
     """
-    study_a, best_a = _run_study(evaluator, chains_config, n_coarse, seed)
+    if progress:
+        print(f"[Stage A] 거친 모델탐색 {n_coarse}회")
+    study_a, best_a = _run_study(evaluator, chains_config, n_coarse, seed,
+                                 progress=progress, label="A ")
 
     # optimize 대상 체인을 Stage A 최적 모델로 고정
     fine_config = dict(chains_config)
@@ -90,7 +103,10 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0):
             for i, (nm, _) in enumerate(_model_params(chain, mode[1])):
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
 
-    study_b, best_b = _run_study(evaluator, fine_config, n_fine, seed, enqueue=enqueue)
+    if progress:
+        print(f"[Stage B] 파라미터 미세조정 {n_fine}회 (모델 고정)")
+    study_b, best_b = _run_study(evaluator, fine_config, n_fine, seed,
+                                 enqueue=enqueue, progress=progress, label="B ")
     if study_b.best_value <= study_a.best_value:
         return study_b, best_b
     return study_a, best_a

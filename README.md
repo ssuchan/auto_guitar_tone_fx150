@@ -92,7 +92,10 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
    PC 출력 볼륨 낮게(클리핑/임피던스 방지).
 7. `python devices.py`로 라인아웃 장치 인덱스 확인 / FLAMMA 에디터 닫기(HID 충돌 방지)
 8. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N --trials 150`
+   - 진행 중 trial별 loss/best 출력. 최적 설정은 **work/result.txt**에도 저장됨.
 9. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
+
+하드웨어 없이 글루 점검: `python main.py --mock --trials 30` (장비 미적용, 로그/저장 경로만 확인).
 
 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
 
