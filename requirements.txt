@@ -1,0 +1,11 @@
+numpy
+scipy
+soundfile
+sounddevice
+librosa
+mido
+python-rtmidi
+pyusb
+yt-dlp
+demucs
+optuna
