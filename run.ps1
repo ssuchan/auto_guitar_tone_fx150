@@ -2,11 +2,11 @@
 # 사용: 파일 우클릭 → "PowerShell에서 실행", 또는 PowerShell에서  ./run.ps1
 # 인자 바꾸려면:  ./run.ps1 -trials 80 -gain 0.3
 param(
-    [string]$di      = "work/my_di6.wav",
+    [string]$di      = "work/my_di4.wav",   # 4s DI (빠름). 정밀하게는 my_di6.wav
     [string]$target  = "work/target_guitar.wav",
     [int]   $play    = 7,
     [double]$gain    = 0.25,
-    [int]   $trials  = 150
+    [int]   $trials  = 100
 )
 
 $env:PYTHONIOENCODING = "utf-8"           # 한글 진행로그 깨짐 방지
