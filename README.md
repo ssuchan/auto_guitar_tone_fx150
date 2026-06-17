@@ -112,6 +112,9 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
 
 하드웨어 없이 글루 점검: `python main.py --mock --trials 30` (장비 미적용, 로그/저장 경로만 확인).
 
+간편 실행: `run.ps1` (우클릭 → PowerShell에서 실행). preflight→main 자동, 진행상황 실시간 표시, 창 유지.
+기본 인자 = work/my_di6.wav, work/target_guitar.wav, play-device 7, gain 0.25, 150 trials. `./run.ps1 -trials 80 -gain 0.3`로 변경.
+
 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
 
 ## 남은 실측/튜닝 (하드웨어 연결 후)
