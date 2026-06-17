@@ -36,17 +36,26 @@ def encode_report(chain, enable, model, params):
 
 
 def apply_candidate(h, candidate, delay=0.5):
-    """열린 HID 핸들 h에 후보 전체를 전송.
+    """열린 HID 핸들 h에 후보 전체를 전송. 2패스(모델 로드 → 파라미터).
 
-    모듈 사이 delay초 간격. 빈/일반 프리셋에 model 로드 시 연사하면 장치가
-    프레임을 드롭함(실장비 확인: 0.6s×6모듈 실패, 1.0s 성공). 기본 0.5s 보수적.
+    실장비 확인된 동작:
+    - 모듈 사이 연사하면 모델 로드 프레임 드롭(0.6s×6 실패, 1.0s 성공) → delay 간격.
+    - **모델을 바꾸는 프레임은 모델 기본값을 로드하고 같은 프레임의 params를 무시**.
+      → 1패스로 모델 로드, 2패스로 같은 모델에 param-only 업데이트해 값 반영.
     """
     items = list(candidate.items())
-    for i, (chain, m) in enumerate(items):
-        report = encode_report(chain, m.get("enable", 1), m["model"], m["params"])
-        h.write(report)
-        if delay and i < len(items) - 1:
-            time.sleep(delay)
+
+    def _send_pass():
+        for i, (chain, m) in enumerate(items):
+            report = encode_report(chain, m.get("enable", 1), m["model"], m["params"])
+            h.write(report)
+            if delay and i < len(items) - 1:
+                time.sleep(delay)
+
+    _send_pass()                 # 1차: 모델 로드 (모델 바뀌면 params는 무시됨)
+    if delay:
+        time.sleep(delay)        # 모델 로드 완료 대기
+    _send_pass()                 # 2차: 모델 이미 로드됨 → params 반영
 
 
 def _phys(p, v):
