@@ -57,6 +57,7 @@ class ReampEvaluator:
         self.settle = settle
         self.cap_idx, self.cap_sr, self.cap_ch = find_mme_capture()
         self.h = open_fx150_hid()
+        self.prev = None                 # 직전 적용 후보 (변경분만 전송해 가속)
         self.best_loss = float("inf")    # 최적 후보의 녹음 보존 (P4)
         self.best_rec = None
 
@@ -83,7 +84,8 @@ class ReampEvaluator:
         return rec, self.cap_sr
 
     def __call__(self, candidate):
-        apply_candidate(self.h, candidate, delay=self.apply_delay)
+        self.prev = apply_candidate(self.h, candidate, delay=self.apply_delay,
+                                    prev=self.prev)   # 변경분만 전송
         time.sleep(self.settle)          # 파라미터 반영 대기
         rec, sr = self.reamp()
         loss = tone_distance(self.target_feat, rec, sr_b=sr)

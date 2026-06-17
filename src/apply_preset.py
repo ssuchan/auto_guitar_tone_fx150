@@ -35,27 +35,38 @@ def encode_report(chain, enable, model, params):
     return build_report(CHAIN_CMD[chain], _payload(enable, model, params))
 
 
-def apply_candidate(h, candidate, delay=0.5):
-    """열린 HID 핸들 h에 후보 전체를 전송. 2패스(모델 로드 → 파라미터).
+def apply_candidate(h, candidate, delay=0.5, prev=None):
+    """열린 HID 핸들 h에 후보 전송. 변경된 모듈만, 모델 변경분만 2패스.
 
     실장비 확인된 동작:
-    - 모듈 사이 연사하면 모델 로드 프레임 드롭(0.6s×6 실패, 1.0s 성공) → delay 간격.
-    - **모델을 바꾸는 프레임은 모델 기본값을 로드하고 같은 프레임의 params를 무시**.
-      → 1패스로 모델 로드, 2패스로 같은 모델에 param-only 업데이트해 값 반영.
-    """
-    items = list(candidate.items())
+    - 모듈 연사 시 모델 로드 프레임 드롭(0.6s×6 실패, 1.0s 성공) → 전송 사이 delay.
+    - **모델 변경 프레임은 모델 기본값을 로드하고 같은 프레임 params를 무시** →
+      모델 바뀐 체인은 2패스(로드→param 반영). params만 바뀐 체인은 1패스로 충분.
+    - prev(직전 적용 후보) 주면 바뀐 체인만 전송(반복 루프 가속). None이면 전체.
+    반환: 이번에 적용한 candidate(다음 호출의 prev로 사용)."""
+    def _frame(chain, m):
+        return encode_report(chain, m.get("enable", 1), m["model"], m["params"])
 
-    def _send_pass():
-        for i, (chain, m) in enumerate(items):
-            report = encode_report(chain, m.get("enable", 1), m["model"], m["params"])
-            h.write(report)
-            if delay and i < len(items) - 1:
+    changed, model_changed = [], []
+    for chain, m in candidate.items():
+        p = prev.get(chain) if prev else None
+        if p != m:
+            changed.append((chain, m))
+            if p is None or p.get("model") != m["model"]:
+                model_changed.append((chain, m))
+
+    for i, (chain, m) in enumerate(changed):      # 1차: 바뀐 모듈 전송
+        h.write(_frame(chain, m))
+        if delay and i < len(changed) - 1:
+            time.sleep(delay)
+    if model_changed:                              # 2차: 모델 바뀐 것만 param 반영
+        if delay:
+            time.sleep(delay)
+        for i, (chain, m) in enumerate(model_changed):
+            h.write(_frame(chain, m))
+            if delay and i < len(model_changed) - 1:
                 time.sleep(delay)
-
-    _send_pass()                 # 1차: 모델 로드 (모델 바뀌면 params는 무시됨)
-    if delay:
-        time.sleep(delay)        # 모델 로드 완료 대기
-    _send_pass()                 # 2차: 모델 이미 로드됨 → params 반영
+    return {k: dict(v) for k, v in candidate.items()}
 
 
 def _phys(p, v):
