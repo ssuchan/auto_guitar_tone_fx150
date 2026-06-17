@@ -3,6 +3,21 @@
 유튜브 일렉기타 커버 영상의 톤을 분석해서, FLAMMA FX150 멀티이펙터의 설정값을
 자동으로 탐색하는 프로그램.
 
+## 다른 PC로 이전 / 새 PC 셋업
+1. **폴더 통째 복사가 제일 안전** — `auto_guitar_tone` 폴더 전체(USB/클라우드).
+   `.git`(이력)·코드·work/(DI녹음·타겟·결과)·매뉴얼 PDF 다 따라감.
+   - git만 옮길 경우: 핵심 산출물(work/my_di*.wav, target_guitar.wav, result.txt,
+     best_reamp.wav)은 강제 추적 중이라 같이 감. 단 매뉴얼 PDF는 gitignore(별도 복사).
+2. 의존성: `pip install -r requirements.txt` (Python 3.13 환경 기준).
+3. **장치 인덱스는 PC마다 다름** — `python src/devices.py`로 FX150 확인,
+   출력목록서 라인아웃 인덱스 찾아 `--play-device N` 갱신(현재 PC는 7).
+   FX150 캡처는 reamp가 MME 자동검출. 실행 전 `python src/preflight.py ...`로 점검.
+4. 환경 주의(이미 코드 반영): Anaconda는 KMP_DUPLICATE_LIB_OK 자동설정,
+   Demucs는 CLI 대신 파이썬 API 사용(torchcodec 불필요).
+5. 하드웨어: 케이블(3.5→6.35) PC출력→FX150 input, USB OUTPUT은 리앰프 시 effected.
+6. (선택) Claude 메모리 이어가려면 `~/.claude/projects/.../memory/` 폴더도 복사.
+7. 찾은 톤은 `work/result.txt`, 실행은 `run.ps1`.
+
 ## 목표
 
 `유튜브 URL` + `내 기타 DI 녹음` → `내 DI를 유튜브 톤에 가깝게 만드는 FX150 설정값`

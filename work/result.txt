@@ -1,0 +1,14 @@
+best loss = 5.6700
+
+NS     : (bypass)
+FX     : (bypass)
+OD     : 02: CLEAN BOOST  |  GAIN=60, TONE=75, VOLUME=70
+AMP    : 53: DIZZY V4 CR  |  GAIN=100, BASS=72, MIDDLE=48, TREBLE=89, PRESENCE=21, MASTER=64
+CAB    : 01: 65 DR 112  |  TUBE=EL84, LOW CUT=108 Hz, HI CUT=9219 Hz, SPACE=79, LEVEL=97
+EQ     : 03: 6 BAND EQ 3  |  100Hz=2 dB, 500Hz=-4 dB, 800Hz=-4 dB, 2kHz=-6 dB, 4kHz=7 dB, 6kHz=-6 dB, LEVEL=19
+MOD    : (bypass)
+DELAY  : (bypass)
+REVERB : (bypass)
+
+# raw candidate
+{'NS': {'enable': 0, 'model': 1, 'params': [0]}, 'FX': {'enable': 0, 'model': 1, 'params': [0, 0, 0, 0]}, 'OD': {'enable': 1, 'model': 2, 'params': [60, 75, 70]}, 'AMP': {'enable': 1, 'model': 53, 'params': [100, 72, 48, 89, 21, 64]}, 'CAB': {'enable': 1, 'model': 1, 'params': [4, 69, 10782, 79, 97]}, 'EQ': {'enable': 1, 'model': 3, 'params': [28, 15, 15, 11, 38, 11, 19]}, 'MOD': {'enable': 0, 'model': 1, 'params': [0, 0, 0, 0]}, 'DELAY': {'enable': 0, 'model': 1, 'params': [0, 0, 0, 0]}, 'REVERB': {'enable': 0, 'model': 1, 'params': [0, 0, 0, 0]}}
