@@ -9,8 +9,9 @@
   2. DI를 라인아웃으로 재생하면서 FX150 USB 캡처로 동시 녹음
   3. 녹음 = 처리된 톤 → 타겟과 tone_distance
 
-라인아웃 장치는 사용자 오디오 인터페이스. find_fx150()의 capture를 사용.
-재생 장치는 별도 지정(인터페이스 라인아웃) 필요 — PLAY_DEVICE로 설정.
+캡처는 MME FX150 사용(중요): WASAPI 캡처는 동시 재생 시 0으로 죽음(실측 확인).
+재생/캡처는 독립 Stream 객체로 동시 구동 — 모듈 sd.play/sd.rec은 서로를 정지시킴.
+재생 장치는 케이블 연결된 라인아웃을 PLAY_DEVICE로 지정.
 """
 import time
 import numpy as np
@@ -18,7 +19,6 @@ import sounddevice as sd
 import soundfile as sf
 import hid
 
-from devices import find_fx150
 from apply_preset import apply_candidate
 from tone_loss import features, tone_distance
 
@@ -30,6 +30,16 @@ def open_fx150_hid():
         if d["vendor_id"] == VID and d["product_id"] == PID:
             h = hid.device(); h.open_path(d["path"]); return h
     raise SystemExit("FX150 HID 미발견 (FLAMMA 에디터 닫았는지 확인).")
+
+
+def find_mme_capture():
+    """MME 호스트의 FX150 캡처 (idx, sr, ch) 반환. 동시 재생 풀듀플렉스 안정."""
+    has = sd.query_hostapis()
+    for idx, d in enumerate(sd.query_devices()):
+        if ("FX150" in d["name"] and d["max_input_channels"] > 0
+                and has[d["hostapi"]]["name"] == "MME"):
+            return idx, int(d["default_samplerate"]), d["max_input_channels"]
+    raise SystemExit("FX150 MME 캡처 미검출.")
 
 
 class ReampEvaluator:
@@ -45,25 +55,32 @@ class ReampEvaluator:
         self.target_feat = features(target_wav)
         self.play_device = play_device
         self.settle = settle
-        fx = find_fx150()
-        if fx is None:
-            raise SystemExit("FX150 오디오 장치 미검출.")
-        self.cap_idx, self.cap_info, _ = fx["capture"]
-        self.cap_sr = int(self.cap_info["default_samplerate"])
-        self.cap_ch = self.cap_info["max_input_channels"]
+        self.cap_idx, self.cap_sr, self.cap_ch = find_mme_capture()
         self.h = open_fx150_hid()
         self.best_loss = float("inf")    # 최적 후보의 녹음 보존 (P4)
         self.best_rec = None
 
     def reamp(self):
-        """DI 재생 + FX150 캡처 동시. 처리된 오디오 반환."""
-        dur = len(self.di) / self.di_sr
+        """DI 재생 + FX150 캡처 동시. 독립 Stream으로 서로 정지 안 시킴."""
         out = np.clip(self.di * self.play_gain, -1.0, 1.0)   # 게인 + 클리핑 가드 (P5)
-        rec = sd.rec(int(self.cap_sr * (dur + 0.3)), samplerate=self.cap_sr,
-                     channels=self.cap_ch, dtype="float32", device=self.cap_idx)
-        sd.play(out, samplerate=self.di_sr, device=self.play_device)
-        sd.wait()
-        return np.asarray(rec), self.cap_sr
+        out = np.column_stack([out, out])                    # 모노 → 스테레오 출력
+        captured = []
+
+        def in_cb(indata, frames, tinfo, status):
+            captured.append(indata.copy())
+
+        ins = sd.InputStream(device=self.cap_idx, channels=self.cap_ch,
+                             samplerate=self.cap_sr, callback=in_cb)
+        outs = sd.OutputStream(device=self.play_device, channels=out.shape[1],
+                               samplerate=self.di_sr)
+        ins.start(); outs.start()
+        try:
+            outs.write(out)
+            sd.sleep(200)                # 이펙트 꼬리(리버브/딜레이) 캡처
+        finally:
+            ins.stop(); outs.stop(); ins.close(); outs.close()
+        rec = np.concatenate(captured) if captured else np.zeros((1, self.cap_ch), "float32")
+        return rec, self.cap_sr
 
     def __call__(self, candidate):
         apply_candidate(self.h, candidate, delay=self.apply_delay)
