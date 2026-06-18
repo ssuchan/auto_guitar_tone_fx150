@@ -18,6 +18,38 @@ N_MELS = 128
 N_MFCC = 20
 SILENCE_FLOOR = 1e-4   # 이 RMS 미만이면 사실상 무음으로 간주
 
+# 시간/공간 특징 파라미터 (리버브/딜레이/모듈레이션 포착용).
+FR = SR / HOP          # 엔벨로프 샘플레이트 ≈ 86.1 Hz
+AC_LAGS = 64           # 자기상관 비교 lag 수 (~0.74s까지: 딜레이 반복 + 리버브 감쇠)
+MOD_BINS = 32          # 변조 스펙트럼 bin 수
+MOD_FMIN, MOD_FMAX = 0.5, 20.0   # 변조 주파수 대역(Hz): 트레몰로/코러스/리듬
+
+
+def _envelope(S):
+    """STFT magnitude → 프레임 에너지 엔벨로프 (T,)."""
+    return np.sqrt((S ** 2).mean(axis=0) + 1e-12)
+
+
+def _env_autocorr(env, n_lags=AC_LAGS):
+    """엔벨로프 정규화 자기상관(lag1~). 딜레이=해당 lag에 피크, 리버브=초반 lag 감쇠 둔화."""
+    e = env - env.mean()
+    ac = np.correlate(e, e, mode="full")[len(e) - 1:]
+    ac = ac / (ac[0] + 1e-9)
+    out = ac[1:1 + n_lags]
+    if len(out) < n_lags:
+        out = np.pad(out, (0, n_lags - len(out)))
+    return out
+
+
+def _mod_spectrum(env, n_bins=MOD_BINS):
+    """엔벨로프의 변조 스펙트럼(0.5~20Hz, 정규화). 트레몰로/코러스 LFO·시간질감."""
+    e = env - env.mean()
+    E = np.abs(np.fft.rfft(e * np.hanning(len(e))))
+    f = np.fft.rfftfreq(len(e), d=HOP / SR)
+    ms = np.interp(np.linspace(MOD_FMIN, MOD_FMAX, n_bins), f, E)
+    s = ms.sum()
+    return ms / s if s > 0 else ms
+
 
 def _load(x, sr_in=None):
     """ndarray 또는 (path) 입력을 모노 SR로 정규화."""
@@ -48,6 +80,7 @@ def features(x, sr_in=None):
     cent = librosa.feature.spectral_centroid(S=S, sr=SR)
     roll = librosa.feature.spectral_rolloff(S=S, sr=SR)
     flat = librosa.feature.spectral_flatness(S=S)
+    env = _envelope(S)
     return {
         "ltas": ltas,
         "mfcc_mean": mfcc.mean(axis=1),
@@ -56,6 +89,8 @@ def features(x, sr_in=None):
         "centroid": float(cent.mean()),
         "rolloff": float(roll.mean()),
         "flatness": float(flat.mean()),
+        "env_ac": _env_autocorr(env),        # 딜레이/리버브(시간 자기유사성)
+        "mod_spec": _mod_spectrum(env),      # 트레몰로/코러스/시간 질감
     }
 
 
@@ -68,6 +103,8 @@ W = {
     "centroid":  0.8,
     "rolloff":   0.3,
     "flatness":  0.5,
+    "env_ac":    1.5,   # 딜레이/리버브 (시간 자기상관) — 합성검증으로 보정
+    "mod_spec":  8.0,   # 변조 스펙트럼(정규화라 값이 작아 가중↑)
 }
 
 
@@ -85,6 +122,8 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / nyq
     parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / nyq
     parts["flatness"] = abs(fa["flatness"] - fb["flatness"]) * 5
+    parts["env_ac"] = float(np.sqrt(np.mean((fa["env_ac"] - fb["env_ac"]) ** 2)))
+    parts["mod_spec"] = float(np.sqrt(np.mean((fa["mod_spec"] - fb["mod_spec"]) ** 2)))
     dist = sum(W[k] * parts[k] for k in parts)
     return (dist, parts) if return_parts else dist
 
