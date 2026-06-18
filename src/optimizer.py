@@ -62,11 +62,17 @@ def _suggest_model(trial, chain):
     return trial.suggest_categorical(f"{chain}.model", allowed)
 
 
+def _is_frozen_large(chain, steps):
+    """고정해야 하는 큰 값인가. CAB 컷(LOW/HI CUT)은 실측상 정상이라 최적화하고,
+    DELAY TIME만 고정(템포동기 + F.BACK 바이트 누수 이슈로 raw 의미 불명확)."""
+    return _is_large(steps) and chain == "DELAY"
+
+
 def _suggest_params(trial, chain, model):
-    """모델 파라미터 제안. 큰 값(steps>255)은 안전값으로 고정(미탐색)."""
+    """모델 파라미터 제안. 고정 대상 큰 값(DELAY TIME)만 안전값으로 고정."""
     out = []
     for nm, steps in _model_params(chain, model):
-        if _is_large(steps):
+        if _is_frozen_large(chain, steps):
             out.append(_safe_large_value(chain, nm))
         else:
             out.append(trial.suggest_int(f"{chain}.{nm}", 0, steps))
@@ -182,7 +188,7 @@ def _build_enqueue(fine_config, best_a):
         if isinstance(mode, tuple) and mode[0] == "fix":
             model = mode[1]
             for i, (nm, steps) in enumerate(_model_params(chain, model)):
-                if _is_large(steps):   # 고정값(미탐색) → enqueue 제외
+                if _is_frozen_large(chain, steps):   # 고정값(미탐색) → enqueue 제외
                     continue
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
         elif mode == "optimize_or_bypass":
@@ -190,7 +196,7 @@ def _build_enqueue(fine_config, best_a):
             enqueue[f"{chain}.enable"] = 1
             model = best_a[chain]["model"]
             for i, (nm, steps) in enumerate(_model_params(chain, model)):
-                if _is_large(steps):
+                if _is_frozen_large(chain, steps):
                     continue
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
     return enqueue
