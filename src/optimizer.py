@@ -24,6 +24,14 @@ CHAIN_EXCLUDE_MODELS = {
     "MOD": {14},    # LOFI(SAMPLE Hz) — 미검증이라 보수적으로 제외
 }
 
+# 특정 파라미터를 고정값으로 핀(탐색 제외). {chain: {param_name: value}}.
+# DELAY SUB-D: OFF(0)가 아니면 raw TIME(ms)을 무시하고 장비 BPM 템포동기로 덮어써
+# 곡과 무관하게 딜레이가 제멋대로 울림. OFF로 고정해 TIME이 항상 적용되게(예측 가능,
+# 저장값=실제값). enum value=options 인덱스이므로 0='OFF'.
+PARAM_PIN = {
+    "DELAY": {"SUB-D": 0, "SUB-D 1": 0, "SUB-D 2": 0},   # DUAL 모델은 SUB-D 1/2
+}
+
 
 def _model_params(chain, model_idx):
     """해당 체인/모델의 파라미터 스펙(정수 단계 리스트) 반환."""
@@ -43,8 +51,9 @@ def _suggest_model(trial, chain):
 
 
 def _suggest_params(trial, chain, model):
-    """모델 파라미터 제안 (전부 탐색 — BE 인코더로 큰 값도 정확히 적용됨)."""
-    return [trial.suggest_int(f"{chain}.{nm}", 0, steps)
+    """모델 파라미터 제안. PARAM_PIN에 있는 파라미터는 고정값(탐색 안 함)."""
+    pins = PARAM_PIN.get(chain, {})
+    return [pins[nm] if nm in pins else trial.suggest_int(f"{chain}.{nm}", 0, steps)
             for nm, steps in _model_params(chain, model)]
 
 
