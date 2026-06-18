@@ -4,7 +4,7 @@
 
 확인 항목:
   1. DI/타겟 wav 존재·읽기 가능
-  2. FX150 USB 오디오 캡처 검출
+  2. FX150 MME 캡처 검출 (reamp.py가 실제 사용하는 호스트 API)
   3. play-device 인덱스가 유효한 출력 장치
   4. FX150 HID 열림 (FLAMMA 에디터가 점유 중이면 실패)
 모두 OK면 main.py 실행 준비 완료. 하나라도 실패면 원인 출력.
@@ -16,9 +16,10 @@ import argparse
 
 def _ok(msg): print(f"  [OK]   {msg}")
 def _fail(msg): print(f"  [FAIL] {msg}")
+def _warn(msg): print(f"  [WARN] {msg}")
 
 
-def check_file(path, label):
+def check_file(path, label, min_duration=1.0):
     if not path:
         _fail(f"{label} 경로 미지정"); return False
     if not os.path.exists(path):
@@ -27,25 +28,54 @@ def check_file(path, label):
         import soundfile as sf
         info = sf.info(path)
         _ok(f"{label}: {path} ({info.duration:.1f}s {info.samplerate}Hz)")
+        if info.duration < min_duration:
+            _warn(f"{label} 너무 짧음({info.duration:.1f}s). 최소 {min_duration:.0f}s 이상 권장.")
         return True
     except Exception as e:
         _fail(f"{label} 읽기 실패: {e}"); return False
 
 
 def check_capture():
-    from devices import find_fx150
-    fx = find_fx150()
-    if fx is None:
-        _fail("FX150 오디오 캡처 미검출 (USB 연결 확인)"); return False
-    idx, info, ha = fx["capture"]
-    _ok(f"FX150 캡처 idx={idx} [{ha}] ch={info['max_input_channels']}")
+    """FX150 MME 캡처 확인. reamp.py는 MME를 사용해야 동시 재생 시 무음을 피할 수 있음."""
+    import sounddevice as sd
+    hostapis = sd.query_hostapis()
+    all_found = []
+    mme_entry = None
+    for idx, d in enumerate(sd.query_devices()):
+        if "FX150" not in d["name"] or d["max_input_channels"] < 1:
+            continue
+        ha_name = hostapis[d["hostapi"]]["name"]
+        all_found.append((idx, d, ha_name))
+        if "MME" in ha_name:
+            mme_entry = (idx, d, ha_name)
+
+    if not all_found:
+        _fail("FX150 오디오 캡처 미검출 (USB 연결 확인)")
+        return False
+
+    if mme_entry is None:
+        apis = [h for _, _, h in all_found]
+        _fail(f"FX150 MME 캡처 없음 (리앰프에 필수). 발견된 호스트: {apis}")
+        return False
+
+    idx, info, ha = mme_entry
+    _ok(f"FX150 MME 캡처 idx={idx} ch={info['max_input_channels']} "
+        f"sr={int(info['default_samplerate'])} — 리앰프 사용 장치")
     return True
 
 
 def check_play_device(idx):
-    if idx is None:
-        _fail("--play-device 미지정"); return False
     import sounddevice as sd
+    if idx is None:                              # 미지정 → reamp와 동일 로직으로 자동탐지
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        from reamp import find_mme_output
+        try:
+            idx, name = find_mme_output()
+        except SystemExit as e:
+            _fail(str(e)); return False
+        _ok(f"play-device 자동탐지 idx={idx} '{name}' out={sd.query_devices(idx)['max_output_channels']}")
+        return True
     try:
         d = sd.query_devices(idx)
     except Exception as e:
@@ -82,8 +112,8 @@ def main():
 
     print("=== 사전점검 ===")
     results = [
-        check_file(args.di, "DI"),
-        check_file(args.target, "타겟"),
+        check_file(args.di, "DI", min_duration=2.0),
+        check_file(args.target, "타겟", min_duration=5.0),
         check_capture(),
         check_play_device(args.play_device),
         check_hid(),

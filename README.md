@@ -120,25 +120,30 @@ FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 
    - **장치 인덱스는 USB 연결 상태에 따라 바뀜** — 케이블 꽂은 상태에서 확인할 것.
    - 사전점검: `python preflight.py --di my_di.wav --target work/target_guitar.wav --play-device N`
      → DI/타겟/캡처/출력장치/HID 5종 수초 검증. 전부 OK 후 8단계.
-8. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N --trials 150`
-   - 진행 중 trial별 loss/best 출력. 최적 설정은 **work/result.txt**, 최적 처리음은 **work/best_reamp.wav** 저장.
-   - FX150 입력 클리핑 시 `--play-gain 0.5` 등으로 재생 레벨 낮춤.
-9. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
+8. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N`
+   - **Stage 1**: OD/AMP/CAB/EQ 최적화 (기본 100회)
+   - **Stage 2**: MOD/DELAY/REVERB 추가 최적화 (기본 50회, `--stage2-trials 0`으로 건너뜀)
+   - DI는 RMS 최대 4초 구간 자동 선택 (`--trim-di 0`으로 전체 사용)
+   - 결과는 **work/results/<타임스탬프>/result.txt** + 최신 복사 **work/result.txt**
+   - FX150 입력 클리핑 시 `--play-gain 0.25` 등으로 재생 레벨 낮춤.
+9. 최적화 후 파라미터 중요도 분석 자동 출력 (어떤 노브가 톤에 가장 영향을 주는지)
+10. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
 
 하드웨어 없이 글루 점검: `python main.py --mock --trials 30` (장비 미적용, 로그/저장 경로만 확인).
 
 간편 실행: `run.ps1` (우클릭 → PowerShell에서 실행). preflight→main 자동, 진행상황 실시간 표시, 창 유지.
-기본 인자 = work/my_di6.wav, work/target_guitar.wav, play-device 7, gain 0.25, 150 trials. `./run.ps1 -trials 80 -gain 0.3`로 변경.
+기본 인자 = work/my_di4.wav, play-device 7, gain 0.25, 100회+50회(Stage2). `./run.ps1 -trials 80 -stage2trials 0`으로 변경.
 
 참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
 
 ## 남은 실측/튜닝 (하드웨어 연결 후)
-- reamp.py 경로 실측: DI 재생→FX150 처리→USB 캡처 동작 확인 (케이블 대기)
-- loss 가중치 튜닝 (실제 기타 톤쌍으로)
-- ~~단계형 최적화(거친 모델탐색→미세 노브) 도입~~ 완료(optimizer.staged_optimize). mock 벤치 flat 74→staged 59. 실톤쌍으로 n_coarse/n_fine 비율 튜닝은 잔여
+- ~~reamp.py 경로 실측~~ 완료 (Phase 5, 2026-06-17)
+- ~~단계형 최적화(거친 모델탐색→미세 노브) 도입~~ 완료(optimizer.staged_optimize). mock 벤치 flat 74→staged 59.
 - ~~apply_preset 끝 0x00 트림 휴리스틱 검증~~ 라이브 확인됨 (AMP GAIN=25 정확 반영)
-- payload 파라미터 스케일링(역방향 범위 HI CUT 등) 실측 보정 — 일부만 검증, 잔여
-- 최적화 시작 전 일반 프리셋 로드 자동화(또는 안내) — 빈 프리셋 model 선택 불가
+- ~~최적화 시작 전 일반 프리셋 로드 자동화~~ 불필요 확인: 빈 프리셋에도 model 로드 됨 (라이브 검증)
+- loss 가중치 튜닝 — 실제 기타 톤쌍으로 W 딕셔너리(tone_loss.py) 재조정. spectral contrast 피처 추가됨.
+- n_coarse/n_fine 비율 튜닝 — 실톤쌍 기반 최적 비율 탐색 잔여 (현재 1:2)
+- payload 파라미터 스케일링(역방향 범위 HI CUT 등) 실측 보정 — 수식은 맞으나 장비 반영 여부 재확인 권장
 
 ### 체인 ↔ HID cmd 맵 (Phase 2 산출물)
 0x82 = 시그널 체인 슬롯 선택(화면 이동). 0x91~0x9a = 각 체인 모듈 파라미터:

@@ -2,8 +2,9 @@
 
 타겟(유튜브 분리 기타)과 후보(리앰프 결과)는 연주 음이 다르므로 파형 비교 불가.
 음 독립적인 음색 통계를 비교한다:
-  - LTAS: 장기 평균 로그 magnitude 스펙트럼 (전체 음색/EQ 곡선)
+  - LTAS: 장기 평균 로그 magnitude 스펙트럼 (전체 음색/EQ 곡선) — 가장 중요
   - MFCC 평균/표준편차 (음색 질감)
+  - spectral contrast: 대역별 피크 대 밸리 비율 (왜곡/하모닉 캐릭터)
   - spectral centroid / rolloff / flatness 평균 (밝기/노이즈성)
 라우드니스 정규화 후 가중합.
 """
@@ -15,6 +16,7 @@ N_FFT = 2048
 HOP = 512
 N_MELS = 128
 N_MFCC = 20
+SILENCE_FLOOR = 1e-4   # 이 RMS 미만이면 사실상 무음으로 간주
 
 
 def _load(x, sr_in=None):
@@ -27,8 +29,9 @@ def _load(x, sr_in=None):
             y = y.mean(axis=1)
         if sr_in and sr_in != SR:
             y = librosa.resample(y, orig_sr=sr_in, target_sr=SR)
-    # RMS 정규화 (라우드니스 맞춤)
-    rms = np.sqrt(np.mean(y ** 2)) + 1e-9
+    rms = float(np.sqrt(np.mean(y ** 2)))
+    if rms < SILENCE_FLOOR:
+        raise ValueError(f"신호 무음(rms={rms:.2e}). 입력 신호/장치 확인.")
     return y / rms
 
 
@@ -40,6 +43,8 @@ def features(x, sr_in=None):
     ltas = ltas - ltas.mean()
     mel = librosa.feature.melspectrogram(S=S ** 2, sr=SR, n_mels=N_MELS)
     mfcc = librosa.feature.mfcc(S=librosa.power_to_db(mel), n_mfcc=N_MFCC)
+    # spectral contrast: 대역별 피크/밸리 비율 → 왜곡 vs 클린 판별에 효과적
+    contrast = librosa.feature.spectral_contrast(S=S, sr=SR, n_bands=6)  # (7, T)
     cent = librosa.feature.spectral_centroid(S=S, sr=SR)
     roll = librosa.feature.spectral_rolloff(S=S, sr=SR)
     flat = librosa.feature.spectral_flatness(S=S)
@@ -47,15 +52,23 @@ def features(x, sr_in=None):
         "ltas": ltas,
         "mfcc_mean": mfcc.mean(axis=1),
         "mfcc_std": mfcc.std(axis=1),
+        "contrast": contrast.mean(axis=1),   # (7,)
         "centroid": float(cent.mean()),
         "rolloff": float(roll.mean()),
         "flatness": float(flat.mean()),
     }
 
 
-# 가중치 (튜닝 대상)
-W = {"ltas": 1.0, "mfcc_mean": 1.0, "mfcc_std": 0.5,
-     "centroid": 1.0, "rolloff": 0.5, "flatness": 1.0}
+# 가중치: ltas(EQ 형태)가 가장 중요, spectral contrast(왜곡 캐릭터) 추가
+W = {
+    "ltas":      2.0,
+    "mfcc_mean": 1.0,
+    "mfcc_std":  0.3,
+    "contrast":  1.0,
+    "centroid":  0.8,
+    "rolloff":   0.3,
+    "flatness":  0.5,
+}
 
 
 def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
@@ -66,15 +79,17 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     parts["ltas"] = float(np.sqrt(np.mean((fa["ltas"] - fb["ltas"]) ** 2)))
     parts["mfcc_mean"] = float(np.linalg.norm(fa["mfcc_mean"] - fb["mfcc_mean"]) / N_MFCC)
     parts["mfcc_std"] = float(np.linalg.norm(fa["mfcc_std"] - fb["mfcc_std"]) / N_MFCC)
-    parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / SR * 4
-    parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / SR * 4
+    parts["contrast"] = float(np.linalg.norm(fa["contrast"] - fb["contrast"]) / 7)
+    # centroid/rolloff: Hz 차이를 Nyquist(SR/2)로 정규화
+    nyq = SR / 2
+    parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / nyq
+    parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / nyq
     parts["flatness"] = abs(fa["flatness"] - fb["flatness"]) * 5
     dist = sum(W[k] * parts[k] for k in parts)
     return (dist, parts) if return_parts else dist
 
 
 if __name__ == "__main__":
-    # 합성 신호로 검증: 동일=0근처, 밝기/왜곡 차이 클수록 거리 증가.
     rng = np.random.default_rng(0)
     dur = 2.0
     t = np.linspace(0, dur, int(SR * dur), endpoint=False)
@@ -82,16 +97,16 @@ if __name__ == "__main__":
     def note(f0, harmonics, drive=0.0):
         y = sum((1.0 / k) * np.sin(2 * np.pi * f0 * k * t) for k in range(1, harmonics + 1))
         if drive > 0:
-            y = np.tanh(y * (1 + drive * 8))  # 왜곡
+            y = np.tanh(y * (1 + drive * 8))
         return y.astype(np.float32)
 
     clean = note(110, 6, drive=0.0)
-    clean_other = note(147, 6, drive=0.0)      # 같은 음색, 다른 음(피치)
-    bright = note(110, 18, drive=0.0)          # 밝음(고조파 多)
-    dist = note(110, 6, drive=1.0)             # 왜곡
+    clean_other = note(147, 6, drive=0.0)
+    bright = note(110, 18, drive=0.0)
+    dist = note(110, 6, drive=1.0)
 
     print("=== tone_distance 검증 (작을수록 유사) ===")
     print(f"clean vs clean(동일)        : {tone_distance(clean, clean):.4f}  (~0 기대)")
-    print(f"clean vs clean_other(다른음): {tone_distance(clean, clean_other):.4f}  (작아야 - 음색 같음)")
-    print(f"clean vs bright            : {tone_distance(clean, bright):.4f}  (커야 - 밝기 차)")
-    print(f"clean vs distorted         : {tone_distance(clean, dist):.4f}  (커야 - 왜곡 차)")
+    print(f"clean vs clean_other(다른음): {tone_distance(clean, clean_other):.4f}  (작아야)")
+    print(f"clean vs bright            : {tone_distance(clean, bright):.4f}  (커야)")
+    print(f"clean vs distorted         : {tone_distance(clean, dist):.4f}  (커야)")

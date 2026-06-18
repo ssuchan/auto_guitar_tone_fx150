@@ -1,11 +1,8 @@
 numpy
-scipy
 soundfile
 sounddevice
 librosa
-mido
-python-rtmidi
-pyusb
+hidapi
 yt-dlp
 demucs
 optuna

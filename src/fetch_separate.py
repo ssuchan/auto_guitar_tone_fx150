@@ -23,9 +23,24 @@ WORK = os.path.join(os.path.dirname(__file__), "..", "work")
 SR = 44100
 
 
+def _ffmpeg_exe():
+    """시스템 ffmpeg 우선, 없으면 imageio-ffmpeg 번들 사용."""
+    import shutil
+    if shutil.which("ffmpeg"):
+        return None   # yt-dlp가 알아서 찾음
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
+
+
 def download_audio(url, out_wav):
     cmd = ["yt-dlp", "-x", "--audio-format", "wav", "--audio-quality", "0",
            "-o", out_wav.replace(".wav", ".%(ext)s"), url]
+    ffmpeg = _ffmpeg_exe()
+    if ffmpeg:
+        cmd += ["--ffmpeg-location", ffmpeg]
     subprocess.run(cmd, check=True)
 
 

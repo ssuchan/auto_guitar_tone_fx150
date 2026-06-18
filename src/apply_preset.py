@@ -35,30 +35,39 @@ def encode_report(chain, enable, model, params):
     return build_report(CHAIN_CMD[chain], _payload(enable, model, params))
 
 
-def apply_candidate(h, candidate, delay=0.5, prev=None):
+def apply_candidate(h, candidate, delay=0.5, param_delay=None, prev=None):
     """열린 HID 핸들 h에 후보 전송. 변경된 모듈만, 모델 변경분만 2패스.
 
+    param_delay: 파라미터만 바뀐 모듈(모델 동일)에 적용할 간격(초).
+                 None이면 delay와 동일. Stage B처럼 모델이 고정된 상황에서
+                 param_delay=0.1로 설정하면 루프가 크게 빨라짐.
+
     실장비 확인된 동작:
-    - 모듈 연사 시 모델 로드 프레임 드롭(0.6s×6 실패, 1.0s 성공) → 전송 사이 delay.
-    - **모델 변경 프레임은 모델 기본값을 로드하고 같은 프레임 params를 무시** →
+    - 모델 변경 프레임은 모델 기본값을 로드하고 같은 프레임 params를 무시 →
       모델 바뀐 체인은 2패스(로드→param 반영). params만 바뀐 체인은 1패스로 충분.
     - prev(직전 적용 후보) 주면 바뀐 체인만 전송(반복 루프 가속). None이면 전체.
     반환: 이번에 적용한 candidate(다음 호출의 prev로 사용)."""
+    if param_delay is None:
+        param_delay = delay
+
     def _frame(chain, m):
         return encode_report(chain, m.get("enable", 1), m["model"], m["params"])
 
     changed, model_changed = [], []
+    model_changed_chains = set()
     for chain, m in candidate.items():
         p = prev.get(chain) if prev else None
         if p != m:
             changed.append((chain, m))
             if p is None or p.get("model") != m["model"]:
                 model_changed.append((chain, m))
+                model_changed_chains.add(chain)
 
     for i, (chain, m) in enumerate(changed):      # 1차: 바뀐 모듈 전송
         h.write(_frame(chain, m))
-        if delay and i < len(changed) - 1:
-            time.sleep(delay)
+        d = delay if chain in model_changed_chains else param_delay
+        if d and i < len(changed) - 1:
+            time.sleep(d)
     if model_changed:                              # 2차: 모델 바뀐 것만 param 반영
         if delay:
             time.sleep(delay)
@@ -95,15 +104,11 @@ def describe(candidate):
 
 
 if __name__ == "__main__":
-    # 캡처된 AMP(0x93) 프레임 재구성 검증.
-    # 원본: aa5511009300 0100 0100 5000 5600 5900 3500 5000 64 919c?  (line79)
-    # line79 stream: aa 55 11 00 93 00 01 00 01 00 50 00 56 00 59 00 35 00 50 00 64 fe 44
     amp_cap = "aa5511009300010001005000560059003500500064fe44"
     amp = encode_module("AMP", enable=1, model=1,
                         params=[0x50, 0x56, 0x59, 0x35, 0x50, 0x64]).hex()
     print(f"AMP 재구성 {'OK ' if amp == amp_cap else 'MISMATCH'}  built={amp}")
 
-    # FX 0x91 (line4): enable1 model1, 4파라미터 [0x3c,0x0f,0x02,0x4e]
     fx_cap = "aa550d009100010001003c000f0002004e919c"
     fx = encode_module("FX", enable=1, model=1, params=[0x3c, 0x0f, 0x02, 0x4e]).hex()
     print(f"FX  재구성 {'OK ' if fx == fx_cap else 'MISMATCH'}  built={fx}")
