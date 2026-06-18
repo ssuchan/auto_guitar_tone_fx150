@@ -17,12 +17,60 @@ from fx150_spec import load_spec, para_steps
 SPEC = load_spec()
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+# 큰 값(Hz/ms) 파라미터는 raw↔물리 매핑이 장비와 어긋나(실측 확인) 라벨을 못 믿는다.
+# 스텝>255 = 값이 1바이트를 넘는 주파수/시간 계열. 이런 건 안전한 값으로 고정하고
+# 최적화 대상에서 제외 → 결과 라벨 신뢰성 확보. (FX/OD/AMP/NS/REVERB는 영향 없음)
+LARGE_STEP_THRESHOLD = 255
+
+# 큰 값만 다루는 모델은 아예 제외 (대체 모델 존재).
+CHAIN_EXCLUDE_MODELS = {
+    "EQ":  {4},     # 4 BAND CUSTOM(FREQ 직접설정) → 6 BAND 고정주파수 모델 사용
+    "MOD": {14},    # LOFI(SAMPLE Hz)
+}
+
+
+def _is_large(steps):
+    return steps > LARGE_STEP_THRESHOLD
+
+
+def _safe_large_value(chain, name):
+    """큰 값 파라미터의 안전 고정 raw값 (음악적으로 중립 = 효과 없음)."""
+    n = name.upper()
+    if "HI CUT" in n:        # 역인코딩: raw0 = 최고Hz = 하이컷 없음
+        return 0
+    if "CUT" in n:           # LOW CUT raw0 = 최저Hz = 로우컷 없음
+        return 0
+    if "TIME" in n:          # 딜레이 타임: 인코딩 안전한 소량(~120ms). SUB-D 동기 시 무시됨
+        return 100
+    return 0                 # 그 외 큰 값(FREQ/SAMPLE 등)
+
 
 def _model_params(chain, model_idx):
     """해당 체인/모델의 파라미터 스펙(정수 단계 리스트) 반환."""
     models = SPEC[chain]["models"]
     m = models[model_idx - 1]
     return [(p["name"], para_steps(p)) for p in m["paras"]]
+
+
+def _suggest_model(trial, chain):
+    """모델 선택. 제외 목록 있으면 categorical로 허용 모델만."""
+    n = len(SPEC[chain]["models"])
+    exclude = CHAIN_EXCLUDE_MODELS.get(chain)
+    if not exclude:
+        return trial.suggest_int(f"{chain}.model", 1, n)
+    allowed = [m for m in range(1, n + 1) if m not in exclude]
+    return trial.suggest_categorical(f"{chain}.model", allowed)
+
+
+def _suggest_params(trial, chain, model):
+    """모델 파라미터 제안. 큰 값(steps>255)은 안전값으로 고정(미탐색)."""
+    out = []
+    for nm, steps in _model_params(chain, model):
+        if _is_large(steps):
+            out.append(_safe_large_value(chain, nm))
+        else:
+            out.append(trial.suggest_int(f"{chain}.{nm}", 0, steps))
+    return out
 
 
 def suggest(trial, chains_config):
@@ -42,8 +90,7 @@ def suggest(trial, chains_config):
                 continue
             if mode[0] == "fix":
                 model = mode[1]
-                params = [trial.suggest_int(f"{chain}.{nm}", 0, steps)
-                          for nm, steps in _model_params(chain, model)]
+                params = _suggest_params(trial, chain, model)
                 cand[chain] = {"enable": 1, "model": model, "params": params}
                 continue
 
@@ -56,10 +103,8 @@ def suggest(trial, chains_config):
                 cand[chain] = {"enable": 0, "model": 1, "params": [0] * len(steps)}
                 continue
 
-        n_models = len(SPEC[chain]["models"])
-        model = trial.suggest_int(f"{chain}.model", 1, n_models)
-        params = [trial.suggest_int(f"{chain}.{nm}", 0, steps)
-                  for nm, steps in _model_params(chain, model)]
+        model = _suggest_model(trial, chain)
+        params = _suggest_params(trial, chain, model)
         cand[chain] = {"enable": 1, "model": model, "params": params}
     return cand
 
@@ -136,13 +181,17 @@ def _build_enqueue(fine_config, best_a):
     for chain, mode in fine_config.items():
         if isinstance(mode, tuple) and mode[0] == "fix":
             model = mode[1]
-            for i, (nm, _) in enumerate(_model_params(chain, model)):
+            for i, (nm, steps) in enumerate(_model_params(chain, model)):
+                if _is_large(steps):   # 고정값(미탐색) → enqueue 제외
+                    continue
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
         elif mode == "optimize_or_bypass":
             # enable=1이 살아남은 경우
             enqueue[f"{chain}.enable"] = 1
             model = best_a[chain]["model"]
-            for i, (nm, _) in enumerate(_model_params(chain, model)):
+            for i, (nm, steps) in enumerate(_model_params(chain, model)):
+                if _is_large(steps):
+                    continue
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
     return enqueue
 
