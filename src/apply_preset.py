@@ -14,6 +14,34 @@ from fx150_spec import load_spec, CHAIN_CMD, para_steps
 
 SPEC = load_spec()
 
+# 프리셋 저장(commit-to-flash) 명령. USBPcap 캡처 + 본체 전원 OFF/ON 테스트로 검증.
+#  - cmd = (slot << 8) | 0xa8.  slot = 대상 프리셋 인덱스(상위바이트), 0x6e = 검증된 슬롯.
+#  - payload = 이름 12바이트(ASCII, null pad) + 꼬리 4바이트(프리셋 메타 추정, 고정값 재현).
+SAVE_OPCODE = 0xA8
+SAVE_DEFAULT_SLOT = 0x6E
+NAME_LEN = 12
+_SAVE_TAIL = bytes.fromhex("60283900")
+
+
+def _name_payload(name):
+    """저장 프레임 payload = 이름(12B null-pad) + 고정 꼬리."""
+    nb = name.encode("ascii")
+    if len(nb) > NAME_LEN:
+        raise ValueError(f"이름은 최대 {NAME_LEN}자: {name!r}")
+    return nb + b"\x00" * (NAME_LEN - len(nb)) + _SAVE_TAIL
+
+
+def save_preset(h, name, slot=SAVE_DEFAULT_SLOT):
+    """현재 워킹버퍼(직전 apply_candidate 결과) + 이름을 프리셋 슬롯에 영구저장.
+
+    선행조건: 저장할 파라미터를 먼저 apply_candidate로 장비에 푸시할 것.
+    모델이 바뀐 체인은 apply_candidate가 2패스로 처리하므로 그대로 호출하면 됨.
+    검증: slot 0x6e(프리셋110)에서 전원 OFF/ON 후 이름·파라미터 유지 확인.
+    다른 슬롯은 꼬리바이트(프리셋 메타)가 다를 수 있어 미검증."""
+    cmd = (slot << 8) | SAVE_OPCODE
+    payload = _name_payload(name)
+    return h.write(build_report(cmd, payload))
+
 
 def _payload(enable, model, params):
     """HID payload 바이트.

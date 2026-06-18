@@ -5,6 +5,7 @@
   python fx150_send.py sweep CMD OFFSET LO HI   # 0x93 base의 payload[OFFSET] 토글
   python fx150_send.py cmd CMD HEXPAYLOAD       # 임의 cmd+payload 1회 전송
   python fx150_send.py cycle82                  # 0x82 값 1~8 순환 (프리셋/씬 전환 추정, 화면 변화 기대)
+  python fx150_send.py save NAME [SLOT]         # 현재 워킹버퍼+이름을 프리셋에 영구저장(0x6ea8). SLOT 기본 0x6e
 
 주의: 장비 상태를 변경. FLAMMA 에디터는 닫고 실행할 것 (HID 점유 충돌).
 복구: 프리셋 재로드 또는 에디터로 초기화.
@@ -63,6 +64,13 @@ def main():
             for val in (1, 2, 3, 4, 5, 6, 7, 8):
                 send(h, 0x82, val.to_bytes(2, "little"))
                 time.sleep(1.5)
+        elif mode == "save":
+            from apply_preset import save_preset, SAVE_DEFAULT_SLOT
+            name = sys.argv[2]
+            slot = int(sys.argv[3], 0) if len(sys.argv) > 3 else SAVE_DEFAULT_SLOT
+            save_preset(h, name, slot)
+            print(f"저장: name={name!r} slot={slot:#04x} "
+                  f"(cmd={(slot << 8) | 0xa8:#06x}). 전원 OFF/ON 후 확인.")
     finally:
         h.close()
 

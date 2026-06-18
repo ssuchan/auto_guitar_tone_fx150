@@ -16,7 +16,7 @@ import shutil
 import datetime
 import argparse
 from optimizer import staged_optimize, print_importance
-from apply_preset import apply_candidate, describe, init_baseline
+from apply_preset import apply_candidate, describe, init_baseline, save_preset, SAVE_DEFAULT_SLOT
 from tone_loss import tone_distance
 
 WORK = os.path.join(os.path.dirname(__file__), "..", "work")
@@ -137,7 +137,16 @@ def main():
                     help="No hardware: check glue/logging/saving only")
     ap.add_argument("--skip-baseline", action="store_true",
                     help="Skip baseline init at start (default=initialize)")
+    ap.add_argument("--save-name", default=None,
+                    help="After applying, persist result to an FX150 preset with this name "
+                         "(max 12 ASCII chars). Omit to only apply without saving.")
+    ap.add_argument("--save-slot", type=lambda x: int(x, 0), default=SAVE_DEFAULT_SLOT,
+                    help="Preset slot to save into (default 0x6e, the verified slot). "
+                         "Device should be on this preset; other slots are unverified.")
     args = ap.parse_args()
+
+    if args.save_name and len(args.save_name.encode("ascii", "ignore")) > 12:
+        ap.error("--save-name must be at most 12 ASCII characters")
 
     if args.mock:
         ev = _MockEvaluator()
@@ -243,8 +252,14 @@ def main():
             if wav:
                 shutil.copy2(wav, os.path.join(WORK, "best_reamp.wav"))
                 print(f"Best processed audio → {wav}")
-            apply_candidate(ev.h, final_best)
-            print("Applied to device. If you like it, save it on the FX150/editor.")
+            apply_candidate(ev.h, final_best)   # prev=None → 전 체인 2패스 전송 = 워킹버퍼 정합
+            if args.save_name:
+                save_preset(ev.h, args.save_name, args.save_slot)
+                print(f"Applied + saved to FX150 preset slot {args.save_slot:#04x} "
+                      f"as '{args.save_name}'. Power-cycle the device to confirm it persisted.")
+            else:
+                print("Applied to device. If you like it, re-run with "
+                      "--save-name NAME to persist it (or save on the FX150/editor).")
         else:
             print("(mock mode — not applied to device)")
 
