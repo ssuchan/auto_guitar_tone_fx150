@@ -16,7 +16,7 @@ import shutil
 import datetime
 import argparse
 from optimizer import staged_optimize, print_importance
-from apply_preset import apply_candidate, describe
+from apply_preset import apply_candidate, describe, init_baseline
 from tone_loss import tone_distance
 
 WORK = os.path.join(os.path.dirname(__file__), "..", "work")
@@ -70,7 +70,7 @@ def _save_result(run_dir, results, ev=None):
             f.write(f"=== {r['label']} (loss={r['loss']:.4f}) ===\n\n")
             f.write(describe(r["best"]) + "\n")
             if r.get("parts"):
-                f.write("\n# 손실 분해\n")
+                f.write("\n# loss breakdown\n")
                 for k, v in sorted(r["parts"].items(), key=lambda x: -x[1]):
                     f.write(f"  {k:12}: {v:.4f}\n")
             f.write(f"\n# raw\n{r['best']}\n\n")
@@ -115,33 +115,35 @@ class _MockEvaluator:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--di", help="내 기타 DI wav")
-    ap.add_argument("--target", help="타겟 기타 wav (fetch_separate 산출)")
+    ap.add_argument("--di", help="my guitar DI wav")
+    ap.add_argument("--target", help="target guitar wav (from fetch_separate)")
     ap.add_argument("--play-device", type=int, default=None,
-                    help="라인아웃 장치 인덱스. 미지정 시 자동탐지(Realtek MME)")
+                    help="line-out device index. Auto-detect (Realtek MME) if omitted")
     ap.add_argument("--trials", type=int, default=100,
-                    help="Stage 1 최적화 횟수 (기본 100)")
+                    help="Stage 1 optimization trials (default 100)")
     ap.add_argument("--stage2-trials", type=int, default=50,
-                    help="Stage 2 MOD/DELAY/REVERB 최적화 횟수. 0=건너뜀 (기본 50)")
+                    help="Stage 2 MOD/DELAY/REVERB trials. 0=skip (default 50)")
     ap.add_argument("--play-gain", type=float, default=1.0,
-                    help="DI 재생 게인. 클리핑 시 줄임 (기본 1.0)")
+                    help="DI playback gain. Lower if clipping (default 1.0)")
     ap.add_argument("--apply-delay", type=float, default=0.5,
-                    help="HID 모듈 전송 간격(초). 모델 로드 드롭 방지 (기본 0.5)")
+                    help="HID module send interval (s). Prevents model-load drops (default 0.5)")
     ap.add_argument("--param-delay", type=float, default=0.1,
-                    help="파라미터만 변경 시 전송 간격(초). Stage B 가속 (기본 0.1)")
+                    help="Send interval (s) when only params change. Speeds up Stage B (default 0.1)")
     ap.add_argument("--trim-di", type=float, default=4.0,
-                    help="DI에서 RMS 최대 구간 길이(초). 0=전체 사용 (기본 4.0)")
+                    help="Length (s) of max-RMS DI segment. 0=use all (default 4.0)")
     ap.add_argument("--time-limit", type=float, default=None,
-                    help="Stage 1 최대 실행 시간(분). 기본=없음")
+                    help="Stage 1 max run time (min). Default=none")
     ap.add_argument("--mock", action="store_true",
-                    help="하드웨어 없이 글루/로그/저장만 점검")
+                    help="No hardware: check glue/logging/saving only")
+    ap.add_argument("--skip-baseline", action="store_true",
+                    help="Skip baseline init at start (default=initialize)")
     args = ap.parse_args()
 
     if args.mock:
         ev = _MockEvaluator()
     else:
         if not (args.di and args.target):
-            ap.error("--di, --target 필요 (또는 --mock). --play-device 미지정 시 자동탐지")
+            ap.error("--di, --target required (or --mock). --play-device auto-detected if omitted")
         from reamp import ReampEvaluator
         ev = ReampEvaluator(args.di, args.target, args.play_device,
                             play_gain=args.play_gain,
@@ -154,10 +156,17 @@ def main():
     results = []
 
     try:
+        # ── Stage 0: 베이스라인 초기화 ────────────────────────────────────
+        # 빈 프리셋에서 시작해도 전 체인을 알려진 상태로 맞춤(FXLOOP 등 최적화 비대상 포함).
+        # 반환을 ev.prev로 두면 Stage 1 첫 trial이 변경분만 전송 → 가속.
+        if not args.mock and ev.h is not None and not args.skip_baseline:
+            print("[Stage 0] Baseline init (AMP/CAB/EQ on, rest bypass)")
+            ev.prev = init_baseline(ev.h, delay=args.apply_delay)
+
         # ── Stage 1: OD / AMP / CAB / EQ ──────────────────────────────────
         n_coarse = max(1, args.trials // 3)
         print(f"\n{'─'*50}")
-        print(f"[Stage 1] OD/AMP/CAB/EQ 최적화  총 {args.trials}회")
+        print(f"[Stage 1] OD/AMP/CAB/EQ optimization  {args.trials} trials")
         print(f"{'─'*50}")
         study1, best1 = staged_optimize(ev, DEFAULT_CHAINS,
                                         n_coarse=n_coarse,
@@ -187,7 +196,7 @@ def main():
             cfg2 = _make_stage2_config(best1)
             n_coarse2 = max(1, args.stage2_trials // 3)
             print(f"\n{'─'*50}")
-            print(f"[Stage 2] MOD/DELAY/REVERB 추가 최적화  총 {args.stage2_trials}회")
+            print(f"[Stage 2] MOD/DELAY/REVERB optimization  {args.stage2_trials} trials")
             print(f"{'─'*50}")
             study2, best2 = staged_optimize(ev, cfg2,
                                             n_coarse=n_coarse2,
@@ -206,38 +215,38 @@ def main():
             })
 
             if study2.best_value < study1.best_value:
-                print(f"\n개선: {study1.best_value:.4f} → {study2.best_value:.4f} ✓")
+                print(f"\nImproved: {study1.best_value:.4f} → {study2.best_value:.4f} ✓")
                 final_best = best2
                 final_loss = study2.best_value
             else:
-                print(f"\nStage 2 추가 개선 없음 — Stage 1 결과 채택")
+                print(f"\nStage 2 no improvement — keeping Stage 1 result")
 
         # ── 최종 결과 저장 및 장비 적용 ────────────────────────────────────
         print(f"\n{'═'*50}")
-        print(f"최종 loss = {final_loss:.4f}")
+        print(f"Final loss = {final_loss:.4f}")
         print(describe(final_best))
 
-        # 손실 분해 출력
+        # loss breakdown
         parts = _get_parts(ev, ev.best_rec)
         if parts:
-            print("\n손실 분해 (큰 순):")
+            print("\nLoss breakdown (largest first):")
             for k, v in sorted(parts.items(), key=lambda x: -x[1]):
                 print(f"  {k:12}: {v:.4f}")
             results[-1]["parts"] = parts   # 최신 분해로 덮어씀
 
         result_path = _save_result(run_dir, results, ev)
-        print(f"\n결과 저장 → {result_path}")
-        print(f"이력 폴더 → {run_dir}")
+        print(f"\nResult saved → {result_path}")
+        print(f"History dir → {run_dir}")
 
         if ev.h is not None:
             wav = ev.save_best(os.path.join(run_dir, "best_reamp.wav"))
             if wav:
                 shutil.copy2(wav, os.path.join(WORK, "best_reamp.wav"))
-                print(f"최적 처리음 → {wav}")
+                print(f"Best processed audio → {wav}")
             apply_candidate(ev.h, final_best)
-            print("장비에 적용됨. 마음에 들면 FX150/에디터에서 저장하세요.")
+            print("Applied to device. If you like it, save it on the FX150/editor.")
         else:
-            print("(mock 모드 — 장비 미적용)")
+            print("(mock mode — not applied to device)")
 
     finally:
         ev.close()

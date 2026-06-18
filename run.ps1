@@ -15,23 +15,23 @@ param(
 $env:PYTHONIOENCODING = "utf-8"
 Set-Location $PSScriptRoot
 
-# play=-1 이면 자동탐지: --play-device 인자를 아예 빼서 main/preflight가 직접 탐지.
+# play=-1 means auto-detect: drop the --play-device arg so main/preflight detect it.
 $playArgs = @()
-$playLabel = "자동탐지"
+$playLabel = "auto-detect"
 if ($play -ge 0) { $playArgs = @("--play-device", $play); $playLabel = $play }
 
 Write-Host "=== auto_guitar_tone ===" -ForegroundColor Cyan
 Write-Host "DI=$di  target=$target  play=$playLabel  gain=$gain"
 Write-Host "trials=$trials  stage2=$stage2trials  param-delay=$paramdelay  trim-di=$trimdi`n"
 
-# 사전점검
+# preflight
 python src/preflight.py --di $di --target $target @playArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "`n사전점검 실패 — 위 항목 해결 후 다시." -ForegroundColor Red
-    Read-Host "엔터로 닫기"; exit 1
+    Write-Host "`nPreflight failed — fix the above and retry." -ForegroundColor Red
+    Read-Host "Press Enter to close"; exit 1
 }
 
-Write-Host "`n--- 최적화 시작 ---`n" -ForegroundColor Green
+Write-Host "`n--- optimization start ---`n" -ForegroundColor Green
 python src/main.py `
     --di $di `
     --target $target `
@@ -42,5 +42,5 @@ python src/main.py `
     --param-delay $paramdelay `
     --trim-di $trimdi
 
-Write-Host "`n=== 끝. work/results/ 및 work/result.txt 확인 ===" -ForegroundColor Cyan
-Read-Host "엔터로 창 닫기"
+Write-Host "`n=== Done. See work/results/ and work/result.txt ===" -ForegroundColor Cyan
+Read-Host "Press Enter to close window"

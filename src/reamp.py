@@ -23,7 +23,9 @@ from apply_preset import apply_candidate
 from tone_loss import features, tone_distance
 
 VID, PID = 0x34DB, 0x8004
-SILENCE_FLOOR = 0.005   # 이 RMS 미만 → 무음 캡처로 간주
+# 무음 판정은 peak 기준. 케이블 미연결/USB dry면 peak≈0이지만, 클린·조용한
+# 패치는 RMS가 낮아도 어택 peak가 0.3~0.5라 RMS 기준은 오검출을 낸다(실측).
+SILENCE_PEAK_FLOOR = 0.02   # 이 peak 미만 → 신호 없음(무음 캡처)으로 간주
 SILENCE_PENALTY = 100.0
 
 
@@ -31,7 +33,7 @@ def open_fx150_hid():
     for d in hid.enumerate():
         if d["vendor_id"] == VID and d["product_id"] == PID:
             h = hid.device(); h.open_path(d["path"]); return h
-    raise SystemExit("FX150 HID 미발견 (FLAMMA 에디터 닫았는지 확인).")
+    raise SystemExit("FX150 HID not found (close the FLAMMA editor?).")
 
 
 def find_mme_capture():
@@ -41,7 +43,7 @@ def find_mme_capture():
         if ("FX150" in d["name"] and d["max_input_channels"] > 0
                 and has[d["hostapi"]]["name"] == "MME"):
             return idx, int(d["default_samplerate"]), d["max_input_channels"]
-    raise SystemExit("FX150 MME 캡처 미검출.")
+    raise SystemExit("FX150 MME capture not detected.")
 
 
 def find_mme_output(name_hint="Realtek"):
@@ -63,7 +65,7 @@ def find_mme_output(name_hint="Realtek"):
             return idx, name
     if candidates:                               # 폴백: 첫 MME 출력
         return candidates[0]
-    raise SystemExit("MME 출력 장치 미검출 — --play-device로 직접 지정.")
+    raise SystemExit("No MME output device found — specify --play-device manually.")
 
 
 def _best_segment(y, sr, seg_sec):
@@ -90,14 +92,14 @@ class ReampEvaluator:
             self.di = self.di.mean(axis=1)
         if trim_sec and trim_sec > 0 and len(self.di) > int(trim_sec * self.di_sr):
             self.di = _best_segment(self.di, self.di_sr, trim_sec)
-            print(f"DI 자동 트림: RMS 최대 {trim_sec:.1f}s 구간 선택")
+            print(f"DI auto-trim: selected max-RMS {trim_sec:.1f}s segment")
         self.play_gain = play_gain
         self.apply_delay = apply_delay
         self.param_delay = param_delay
         self.target_feat = features(target_wav)
         if play_device is None:                  # 번호 미지정 → 라인아웃 자동탐지
             idx, name = find_mme_output()
-            print(f"라인아웃 자동탐지: idx={idx} '{name}'")
+            print(f"Line-out auto-detect: idx={idx} '{name}'")
             self.play_device = idx
         else:
             self.play_device = play_device
@@ -136,19 +138,20 @@ class ReampEvaluator:
         time.sleep(self.settle)
         rec, sr = self.reamp()
 
-        # 무음 감지: 케이블 미연결 / USB OUTPUT dry 설정 오류 등
+        # 무음 감지: 케이블 미연결 / USB OUTPUT dry 설정 오류 등 → peak도 ≈0.
+        # peak 기준이라 클린·조용한 패치(낮은 RMS, 높은 peak)는 통과시켜 정상 평가.
         rec_mono = rec.mean(axis=1) if rec.ndim > 1 else rec
-        rms = float(np.sqrt(np.mean(rec_mono ** 2)))
-        if rms < SILENCE_FLOOR:
-            print(f"  [WARN] 캡처 무음(rms={rms:.5f}): "
-                  "USB OUTPUT=effected 확인, 케이블/장치 확인", flush=True)
+        peak = float(np.max(np.abs(rec_mono)))
+        if peak < SILENCE_PEAK_FLOOR:
+            rms = float(np.sqrt(np.mean(rec_mono ** 2)))
+            print(f"  [WARN] silent capture (peak={peak:.5f} rms={rms:.5f}): "
+                  "check USB OUTPUT=effected, cable/device", flush=True)
             return SILENCE_PENALTY
 
         # 클리핑 경고
-        peak = float(np.max(np.abs(rec_mono)))
         if peak >= 0.99:
-            print(f"  [WARN] 캡처 클리핑(peak={peak:.3f}): "
-                  "--play-gain 낮추거나 PC 출력 볼륨 줄이세요", flush=True)
+            print(f"  [WARN] capture clipping (peak={peak:.3f}): "
+                  "lower --play-gain or reduce PC output volume", flush=True)
 
         loss = tone_distance(self.target_feat, rec, sr_b=sr)
         if loss < self.best_loss:

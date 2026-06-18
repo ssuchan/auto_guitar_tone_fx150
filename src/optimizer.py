@@ -171,7 +171,7 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
 
     sampler_a = optuna.samplers.RandomSampler(seed=seed)
     if progress:
-        print(f"[Stage A] 랜덤 모델탐색 {n_coarse}회")
+        print(f"[Stage A] random model search  {n_coarse} trials")
     study_a, best_a = _run_study(evaluator, chains_config, n_coarse, sampler_a,
                                   progress=progress, label="A ",
                                   time_limit_sec=time_a)
@@ -185,7 +185,7 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
 
     sampler_b = optuna.samplers.TPESampler(seed=seed, n_startup_trials=3)
     if progress:
-        print(f"[Stage B] TPE 파라미터 미세조정 {n_fine}회 (모델 고정)")
+        print(f"[Stage B] TPE param fine-tune  {n_fine} trials (model fixed)")
     study_b, best_b = _run_study(evaluator, fine_config, n_fine, sampler_b,
                                   enqueue=enqueue, progress=progress, label="B ",
                                   time_limit_sec=time_b)
@@ -200,7 +200,7 @@ def print_importance(study, top_n=10):
         imp = optuna.importance.get_param_importances(study)
         if not imp:
             return
-        print("\n파라미터 중요도 (loss에 가장 영향 큰 순):")
+        print("\nParam importance (largest effect on loss first):")
         for name, val in list(imp.items())[:top_n]:
             bar = "█" * max(1, int(val * 30))
             print(f"  {name:35}: {bar} {val:.3f}")

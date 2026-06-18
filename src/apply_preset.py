@@ -10,7 +10,7 @@ trailing 0x00 한 바이트를 생략한다 (캡처 AMP/FX 프레임으로 검�
 """
 import time
 from fx150_protocol import build_frame, build_report
-from fx150_spec import load_spec, CHAIN_CMD
+from fx150_spec import load_spec, CHAIN_CMD, para_steps
 
 SPEC = load_spec()
 
@@ -76,6 +76,37 @@ def apply_candidate(h, candidate, delay=0.5, param_delay=None, prev=None):
             if delay and i < len(model_changed) - 1:
                 time.sleep(delay)
     return {k: dict(v) for k, v in candidate.items()}
+
+
+# 빈 프리셋에서 시작할 때 장비를 알려진 상태로 맞추는 베이스라인.
+#  - enabled 체인: 들리는 톤이 나오도록 AMP/CAB 켜고 EQ 평탄(중앙값).
+#  - 나머지(FXLOOP 포함): bypass. FXLOOP은 최적화 대상이 아니라 여기서만 설정됨.
+BASELINE_ENABLED = {"AMP": 1, "CAB": 1, "EQ": 1}   # chain -> 1-based 모델
+BASELINE_BYPASS = ["FX", "OD", "FXLOOP", "NS", "MOD", "DELAY", "REVERB"]
+
+
+def _center_params(chain, model):
+    """해당 모델 파라미터를 중앙값(steps//2)으로. EQ는 0dB 평탄, AMP/CAB는 중립 톤."""
+    paras = SPEC[chain]["models"][model - 1]["paras"]
+    return [para_steps(p) // 2 for p in paras]
+
+
+def baseline_candidate():
+    """전 체인을 명시적으로 정의한 베이스라인 후보 반환 (빈 프리셋 대비)."""
+    cand = {}
+    for chain, model in BASELINE_ENABLED.items():
+        cand[chain] = {"enable": 1, "model": model,
+                       "params": _center_params(chain, model)}
+    for chain in BASELINE_BYPASS:
+        n = len(SPEC[chain]["models"][0]["paras"])
+        cand[chain] = {"enable": 0, "model": 1, "params": [0] * n}
+    return cand
+
+
+def init_baseline(h, delay=0.5):
+    """베이스라인을 장비에 1회 전송. 반환값을 evaluator.prev로 쓰면 첫 trial 가속."""
+    cand = baseline_candidate()
+    return apply_candidate(h, cand, delay=delay, prev=None)
 
 
 def _phys(p, v):

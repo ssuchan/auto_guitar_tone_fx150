@@ -86,12 +86,12 @@ def main():
 
     raw = os.path.join(WORK, "dl.wav")
     trimmed = os.path.join(WORK, "trimmed.wav")
-    print("1) 다운로드..."); download_audio(url, raw)
-    print("2) 구간 컷..."); trim(raw, trimmed, start, dur)
-    print("3) 분리(시간 소요)..."); guitar = separate(trimmed)
+    print("1) downloading..."); download_audio(url, raw)
+    print("2) trimming segment..."); trim(raw, trimmed, start, dur)
+    print("3) separating (takes time)..."); guitar = separate(trimmed)
     target = os.path.join(WORK, "target_guitar.wav")
     sf.write(target, guitar, SR)
-    print(f"완료 -> {target}")
+    print(f"done -> {target}")
 
 
 if __name__ == "__main__":

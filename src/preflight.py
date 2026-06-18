@@ -21,18 +21,18 @@ def _warn(msg): print(f"  [WARN] {msg}")
 
 def check_file(path, label, min_duration=1.0):
     if not path:
-        _fail(f"{label} 경로 미지정"); return False
+        _fail(f"{label} path not given"); return False
     if not os.path.exists(path):
-        _fail(f"{label} 없음: {path}"); return False
+        _fail(f"{label} not found: {path}"); return False
     try:
         import soundfile as sf
         info = sf.info(path)
         _ok(f"{label}: {path} ({info.duration:.1f}s {info.samplerate}Hz)")
         if info.duration < min_duration:
-            _warn(f"{label} 너무 짧음({info.duration:.1f}s). 최소 {min_duration:.0f}s 이상 권장.")
+            _warn(f"{label} too short ({info.duration:.1f}s). {min_duration:.0f}s+ recommended.")
         return True
     except Exception as e:
-        _fail(f"{label} 읽기 실패: {e}"); return False
+        _fail(f"{label} read failed: {e}"); return False
 
 
 def check_capture():
@@ -50,17 +50,17 @@ def check_capture():
             mme_entry = (idx, d, ha_name)
 
     if not all_found:
-        _fail("FX150 오디오 캡처 미검출 (USB 연결 확인)")
+        _fail("FX150 audio capture not detected (check USB connection)")
         return False
 
     if mme_entry is None:
         apis = [h for _, _, h in all_found]
-        _fail(f"FX150 MME 캡처 없음 (리앰프에 필수). 발견된 호스트: {apis}")
+        _fail(f"No FX150 MME capture (required for reamp). Hosts found: {apis}")
         return False
 
     idx, info, ha = mme_entry
-    _ok(f"FX150 MME 캡처 idx={idx} ch={info['max_input_channels']} "
-        f"sr={int(info['default_samplerate'])} — 리앰프 사용 장치")
+    _ok(f"FX150 MME capture idx={idx} ch={info['max_input_channels']} "
+        f"sr={int(info['default_samplerate'])} — used by reamp")
     return True
 
 
@@ -74,14 +74,14 @@ def check_play_device(idx):
             idx, name = find_mme_output()
         except SystemExit as e:
             _fail(str(e)); return False
-        _ok(f"play-device 자동탐지 idx={idx} '{name}' out={sd.query_devices(idx)['max_output_channels']}")
+        _ok(f"play-device auto-detect idx={idx} '{name}' out={sd.query_devices(idx)['max_output_channels']}")
         return True
     try:
         d = sd.query_devices(idx)
     except Exception as e:
-        _fail(f"play-device idx={idx} 조회 실패: {e}"); return False
+        _fail(f"play-device idx={idx} query failed: {e}"); return False
     if d["max_output_channels"] < 1:
-        _fail(f"play-device idx={idx} '{d['name']}' 출력 채널 없음"); return False
+        _fail(f"play-device idx={idx} '{d['name']}' has no output channels"); return False
     _ok(f"play-device idx={idx} '{d['name']}' out={d['max_output_channels']}")
     return True
 
@@ -94,13 +94,13 @@ def check_hid():
         if d["vendor_id"] == VID and d["product_id"] == PID:
             path = d["path"]; break
     if path is None:
-        _fail("FX150 HID 미발견 (USB 연결 확인)"); return False
+        _fail("FX150 HID not found (check USB connection)"); return False
     try:
         h = hid.device(); h.open_path(path); h.close()
-        _ok("FX150 HID 열림")
+        _ok("FX150 HID opened")
         return True
     except Exception as e:
-        _fail(f"FX150 HID 열기 실패 (FLAMMA 에디터 닫았는지 확인): {e}"); return False
+        _fail(f"FX150 HID open failed (close the FLAMMA editor?): {e}"); return False
 
 
 def main():
@@ -110,19 +110,19 @@ def main():
     ap.add_argument("--play-device", type=int)
     args = ap.parse_args()
 
-    print("=== 사전점검 ===")
+    print("=== preflight ===")
     results = [
         check_file(args.di, "DI", min_duration=2.0),
-        check_file(args.target, "타겟", min_duration=5.0),
+        check_file(args.target, "target", min_duration=5.0),
         check_capture(),
         check_play_device(args.play_device),
         check_hid(),
     ]
-    print("=== 결과 ===")
+    print("=== result ===")
     if all(results):
-        print("전부 OK → main.py 실행 준비 완료.")
+        print("All OK → ready to run main.py.")
         sys.exit(0)
-    print(f"{results.count(False)}개 실패 → 위 항목 해결 후 재실행.")
+    print(f"{results.count(False)} failed → fix the above and retry.")
     sys.exit(1)
 
 

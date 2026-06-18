@@ -18,15 +18,15 @@ from devices import find_fx150
 def record(out_wav="my_di.wav", seconds=15.0):
     fx = find_fx150()
     if fx is None:
-        raise SystemExit("FX150 오디오 장치 미검출. USB 연결 확인.")
+        raise SystemExit("FX150 audio device not detected. Check USB connection.")
     idx, info, ha = fx["capture"]
     sr = int(info["default_samplerate"])
     ch = info["max_input_channels"]
-    print(f"캡처 장치 idx={idx} sr={sr} ch={ch} [{ha}]")
-    print(f"{seconds:.0f}초 녹음. 기타 클린 연주 준비.")
+    print(f"capture device idx={idx} sr={sr} ch={ch} [{ha}]")
+    print(f"recording {seconds:.0f}s. Get ready to play clean.")
     for n in (3, 2, 1):
         print(f"  {n}..."); time.sleep(1.0)
-    print("● 녹음 시작")
+    print("● recording")
 
     rec = sd.rec(int(sr * seconds), samplerate=sr, channels=ch, dtype="float32", device=idx)
     sd.wait()
@@ -36,11 +36,11 @@ def record(out_wav="my_di.wav", seconds=15.0):
     sf.write(out_wav, mono, sr)
     rms = float(np.sqrt(np.mean(mono ** 2)))
     peak = float(np.max(np.abs(mono)))
-    print(f"저장 -> {out_wav}  RMS={rms:.5f} peak={peak:.3f}")
+    print(f"saved -> {out_wav}  RMS={rms:.5f} peak={peak:.3f}")
     if rms < 1e-3:
-        print("경고: 신호 거의 없음. 기타 연결/볼륨/입력잭 확인. (드라이 출력 설정도 확인)")
+        print("WARN: almost no signal. Check guitar/volume/input jack (and dry-output setting).")
     elif peak >= 0.99:
-        print("경고: 클리핑(peak≈1). FX150 입력/녹음 볼륨 낮추고 재녹음 권장.")
+        print("WARN: clipping (peak≈1). Lower FX150 input/record volume and re-record.")
 
 
 def main():
