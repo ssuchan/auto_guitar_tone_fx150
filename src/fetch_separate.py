@@ -1,12 +1,13 @@
 """유튜브 오디오 다운로드 + Demucs 기타 분리 → 타겟 wav 생성.
 
-  python fetch_separate.py URL [start_sec] [dur_sec]
+  python fetch_separate.py URL [start_sec] [dur_sec] [--song NAME]
 
 - yt-dlp로 오디오 추출 (wav)
 - 선택 구간 잘라냄 (보컬/드럼 적은 기타 구간 고르면 분리 품질 ↑)
+  예) 2:45~3:05 구간 = start_sec=165, dur_sec=20
 - Demucs(htdemucs) 파이썬 API로 분리 → 일렉기타는 'other' stem에 주로 존재
   (Demucs는 기타 전용 stem 없음 — other = 드럼/베이스/보컬 제외 나머지)
-- 출력: work/target_guitar.wav
+- 출력: --song 주면 work/songs/<NAME>/target.wav, 아니면 work/target_guitar.wav
 
 주의: 첫 실행 시 Demucs 모델(~수백MB) 자동 다운로드, CPU 분리는 곡당 수 분.
 """
@@ -35,9 +36,28 @@ def _ffmpeg_exe():
         return None
 
 
+def sanitize(name, maxlen=40):
+    """폴더명으로 안전한 문자열. 영숫자/한글 유지, 나머지는 _ 로, 길이 제한."""
+    import re
+    s = re.sub(r"[^0-9A-Za-z가-힣]+", "_", name).strip("_")
+    return (s[:maxlen].rstrip("_") or "song")
+
+
+def youtube_title(url):
+    """yt_dlp 파이썬 API로 영상 제목 가져옴(다운로드 없이). 실패 시 None."""
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+            return ydl.extract_info(url, download=False).get("title")
+    except Exception as e:
+        print(f"  (제목 가져오기 실패: {e})")
+        return None
+
+
 def download_audio(url, out_wav):
-    cmd = ["yt-dlp", "-x", "--audio-format", "wav", "--audio-quality", "0",
-           "-o", out_wav.replace(".wav", ".%(ext)s"), url]
+    # yt-dlp CLI는 PATH에 없을 수 있어 python -m yt_dlp 로 호출(모듈은 설치돼 있음).
+    cmd = [sys.executable, "-m", "yt_dlp", "-x", "--audio-format", "wav",
+           "--audio-quality", "0", "-o", out_wav.replace(".wav", ".%(ext)s"), url]
     ffmpeg = _ffmpeg_exe()
     if ffmpeg:
         cmd += ["--ffmpeg-location", ffmpeg]
@@ -77,21 +97,36 @@ def separate(in_wav):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__); return
-    os.makedirs(WORK, exist_ok=True)
-    url = sys.argv[1]
-    start = float(sys.argv[2]) if len(sys.argv) > 2 else None
-    dur = float(sys.argv[3]) if len(sys.argv) > 3 else None
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("url")
+    ap.add_argument("start", nargs="?", type=float, default=None,
+                    help="구간 시작(초). 예 2:45 = 165")
+    ap.add_argument("dur", nargs="?", type=float, default=None,
+                    help="구간 길이(초). 예 20")
+    ap.add_argument("--song", default=None,
+                    help="곡 폴더명. 생략하면 유튜브 영상 제목에서 자동 생성. "
+                         "결과는 work/songs/<NAME>/target.wav 로 저장(곡별 분리)")
+    args = ap.parse_args()
 
-    raw = os.path.join(WORK, "dl.wav")
+    os.makedirs(WORK, exist_ok=True)
+    song = args.song
+    if not song:                                # --song 없으면 유튜브 제목으로 자동
+        title = youtube_title(args.url)
+        song = sanitize(title) if title else "song"
+        print(f"  song 폴더명 자동: '{song}'" + (f"  (제목: {title})" if title else ""))
+    out_dir = os.path.join(WORK, "songs", song)
+    os.makedirs(out_dir, exist_ok=True)
+    target = os.path.join(out_dir, "target.wav")
+
+    raw = os.path.join(WORK, "dl.wav")          # scratch (곡 무관, 매번 덮어씀)
     trimmed = os.path.join(WORK, "trimmed.wav")
-    print("1) downloading..."); download_audio(url, raw)
-    print("2) trimming segment..."); trim(raw, trimmed, start, dur)
+    print("1) downloading..."); download_audio(args.url, raw)
+    print("2) trimming segment..."); trim(raw, trimmed, args.start, args.dur)
     print("3) separating (takes time)..."); guitar = separate(trimmed)
-    target = os.path.join(WORK, "target_guitar.wav")
     sf.write(target, guitar, SR)
     print(f"done -> {target}")
+    print(f"\n다음: python src/main.py --song {song} --trials 100 --stage2-trials 50 --save-name <이름11자>")
 
 
 if __name__ == "__main__":

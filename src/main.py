@@ -12,14 +12,50 @@
   Stage 2: Stage 1 결과 고정 + MOD/DELAY/REVERB 추가 최적화 (--stage2-trials로 제어)
 """
 import os
+import json
+import time
 import shutil
 import datetime
 import argparse
 from optimizer import staged_optimize, print_importance
-from apply_preset import apply_candidate, describe, init_baseline, save_preset, SAVE_DEFAULT_SLOT
+from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
+                          load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
 
 WORK = os.path.join(os.path.dirname(__file__), "..", "work")
+DEFAULT_DI = os.path.join(WORK, "di", "default.wav")   # --di/곡 di.wav 둘 다 없을 때 폴백
+SLOT_REGISTRY = os.path.join(WORK, "preset_slots.json")  # 곡→슬롯 배정 추적
+SLOT_AUTO_START = 111   # 자동 배정 시작 슬롯 (110=thatBand seed 이후부터)
+
+
+def _load_registry():
+    try:
+        with open(SLOT_REGISTRY, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_registry(reg):
+    with open(SLOT_REGISTRY, "w", encoding="utf-8") as f:
+        json.dump(reg, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _resolve_save_slot(reg, song, explicit):
+    """저장 슬롯 인덱스 결정. explicit 있으면 그것, 없으면 자동 배정.
+
+    자동: 같은 곡이 이미 슬롯을 받았으면 그 슬롯 재사용(덮어쓰기), 아니면
+    SLOT_AUTO_START부터 레지스트리에 없는 첫 빈 슬롯."""
+    if explicit is not None:
+        return parse_slot(explicit)
+    for idx, info in reg.items():            # 같은 곡이면 그 슬롯 재사용
+        if song and info.get("song") == song:
+            return int(idx)
+    used = {int(k) for k in reg}
+    idx = SLOT_AUTO_START
+    while idx in used:
+        idx += 1
+    return idx
 
 # Stage 1: 시간계열 이펙트 bypass, 핵심 톤 체인만 최적화
 DEFAULT_CHAINS = {
@@ -51,16 +87,16 @@ def _make_stage2_config(best1):
     return cfg
 
 
-def _run_dir():
-    """work/results/<타임스탬프>/ 생성 후 반환."""
+def _run_dir(base):
+    """<base>/results/<타임스탬프>/ 생성 후 반환. base=곡 폴더(또는 work/)."""
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    d = os.path.join(WORK, "results", ts)
+    d = os.path.join(base, "results", ts)
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def _save_result(run_dir, results, ev=None):
-    """결과 텍스트 저장 + work/result.txt에 최신 복사.
+def _save_result(run_dir, results, base):
+    """결과 텍스트 저장 + <base>/result.txt에 최신 복사.
 
     results = [{"label": str, "best": cand, "loss": float, "study": study}, ...]
     """
@@ -74,7 +110,7 @@ def _save_result(run_dir, results, ev=None):
                 for k, v in sorted(r["parts"].items(), key=lambda x: -x[1]):
                     f.write(f"  {k:12}: {v:.4f}\n")
             f.write(f"\n# raw\n{r['best']}\n\n")
-    shutil.copy2(path, os.path.join(WORK, "result.txt"))
+    shutil.copy2(path, os.path.join(base, "result.txt"))
     return path
 
 
@@ -115,8 +151,13 @@ class _MockEvaluator:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--di", help="my guitar DI wav")
-    ap.add_argument("--target", help="target guitar wav (from fetch_separate)")
+    ap.add_argument("--song", default=None,
+                    help="Per-song workspace name. Uses work/songs/<song>/ for target.wav, "
+                         "di.wav, result.txt, best_reamp.wav, results/. Keeps songs from "
+                         "overwriting each other. Omit to use the flat work/ layout.")
+    ap.add_argument("--di", help="my guitar DI wav (default: work/songs/<song>/di.wav if --song)")
+    ap.add_argument("--target", help="target guitar wav from fetch_separate "
+                                     "(default: work/songs/<song>/target.wav if --song)")
     ap.add_argument("--play-device", type=int, default=None,
                     help="line-out device index. Auto-detect (Realtek MME) if omitted")
     ap.add_argument("--trials", type=int, default=100,
@@ -139,14 +180,27 @@ def main():
                     help="Skip baseline init at start (default=initialize)")
     ap.add_argument("--save-name", default=None,
                     help="After applying, persist result to an FX150 preset with this name "
-                         "(max 12 ASCII chars). Omit to only apply without saving.")
-    ap.add_argument("--save-slot", type=lambda x: int(x, 0), default=SAVE_DEFAULT_SLOT,
-                    help="Preset slot to save into (default 0x6e, the verified slot). "
-                         "Device should be on this preset; other slots are unverified.")
+                         "(max 11 ASCII chars). Omit to only apply without saving.")
+    ap.add_argument("--save-slot", default=None,
+                    help="Preset slot to save into: number (112 / 0x70) or pedal label (38B). "
+                         "Omit to auto-assign the next free slot (tracked in preset_slots.json).")
     args = ap.parse_args()
 
-    if args.save_name and len(args.save_name.encode("ascii", "ignore")) > 12:
-        ap.error("--save-name must be at most 12 ASCII characters")
+    if args.save_name and len(args.save_name.encode("ascii", "ignore")) > NAME_MAX:
+        ap.error(f"--save-name must be at most {NAME_MAX} ASCII characters")
+
+    # --song: 곡별 작업 폴더. target/di 기본 경로를 그 폴더로, 결과도 그쪽에 저장.
+    base = os.path.join(WORK, "songs", args.song) if args.song else WORK
+    os.makedirs(base, exist_ok=True)
+    if args.song:
+        if not args.target:
+            args.target = os.path.join(base, "target.wav")
+        if not args.di:
+            song_di = os.path.join(base, "di.wav")   # 곡 맞춤 DI 우선
+            if os.path.exists(song_di):
+                args.di = song_di
+    if not args.di and os.path.exists(DEFAULT_DI):   # 최종 폴백: 기본 DI
+        args.di = DEFAULT_DI
 
     if args.mock:
         ev = _MockEvaluator()
@@ -161,7 +215,7 @@ def main():
                             trim_sec=args.trim_di if args.trim_di > 0 else None)
 
     time_limit_sec = args.time_limit * 60 if args.time_limit else None
-    run_dir = _run_dir()
+    run_dir = _run_dir(base)
     results = []
 
     try:
@@ -243,23 +297,33 @@ def main():
                 print(f"  {k:12}: {v:.4f}")
             results[-1]["parts"] = parts   # 최신 분해로 덮어씀
 
-        result_path = _save_result(run_dir, results, ev)
+        result_path = _save_result(run_dir, results, base)
         print(f"\nResult saved → {result_path}")
         print(f"History dir → {run_dir}")
 
         if ev.h is not None:
             wav = ev.save_best(os.path.join(run_dir, "best_reamp.wav"))
             if wav:
-                shutil.copy2(wav, os.path.join(WORK, "best_reamp.wav"))
+                shutil.copy2(wav, os.path.join(base, "best_reamp.wav"))
                 print(f"Best processed audio → {wav}")
-            apply_candidate(ev.h, final_best)   # prev=None → 전 체인 2패스 전송 = 워킹버퍼 정합
             if args.save_name:
-                save_preset(ev.h, args.save_name, args.save_slot)
-                print(f"Applied + saved to FX150 preset slot {args.save_slot:#04x} "
-                      f"as '{args.save_name}'. Power-cycle the device to confirm it persisted.")
+                reg = _load_registry()
+                slot = _resolve_save_slot(reg, args.song, args.save_slot)
+                # 대상 슬롯을 먼저 활성화(로드)한 뒤 파라미터 적용 → 그 슬롯에 커밋.
+                load_preset(ev.h, slot)
+                time.sleep(args.apply_delay)
+                apply_candidate(ev.h, final_best)   # prev=None → 전 체인 2패스 = 워킹버퍼 정합
+                save_preset(ev.h, args.save_name, slot)
+                reg[str(slot)] = {"song": args.song or "", "name": args.save_name,
+                                  "label": slot_to_label(slot), "loss": round(final_loss, 4),
+                                  "at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
+                _save_registry(reg)
+                print(f"Applied + saved to FX150 slot {slot} (pedal {slot_to_label(slot)}) "
+                      f"as '{args.save_name}'. Power-cycle to confirm.")
             else:
+                apply_candidate(ev.h, final_best)   # 매칭 톤만 적용(저장 안 함)
                 print("Applied to device. If you like it, re-run with "
-                      "--save-name NAME to persist it (or save on the FX150/editor).")
+                      "--save-name NAME to persist it (auto-assigns a free slot).")
         else:
             print("(mock mode — not applied to device)")
 

@@ -18,16 +18,50 @@ SPEC = load_spec()
 #  - cmd = (slot << 8) | 0xa8.  slot = 대상 프리셋 인덱스(상위바이트), 0x6e = 검증된 슬롯.
 #  - payload = 이름 12바이트(ASCII, null pad) + 꼬리 4바이트(프리셋 메타 추정, 고정값 재현).
 SAVE_OPCODE = 0xA8
+LOAD_OPCODE = 0xA6        # 프리셋 로드(활성화). 캡처상 payload = 0×15.
 SAVE_DEFAULT_SLOT = 0x6E
-NAME_LEN = 12
+_LOAD_PAYLOAD = bytes(15)
+NAME_LEN = 12             # 이름 영역(꼬리 앞) 12바이트
+NAME_MAX = NAME_LEN - 1   # null 종단 1바이트 필요 → 사용 가능 이름은 최대 11자
 _SAVE_TAIL = bytes.fromhex("60283900")
+
+# FX150 슬롯 ↔ 페달 라벨 매핑 (실측 확정: 110=37C, 112=38B).
+# 페달은 뱅크당 3슬롯(A/B/C)으로 표시. 내부 인덱스 = (뱅크-1)*3 + {A:0,B:1,C:2}.
+SLOTS_PER_BANK = 3
+_SLOT_LETTERS = "ABC"
+
+
+def slot_to_label(idx):
+    """내부 슬롯 인덱스 → 페달 표시 라벨. 예 112 -> '38B', 110 -> '37C'."""
+    return f"{idx // SLOTS_PER_BANK + 1}{_SLOT_LETTERS[idx % SLOTS_PER_BANK]}"
+
+
+def label_to_slot(label):
+    """페달 라벨 → 내부 슬롯 인덱스. 예 '38B' -> 112."""
+    import re
+    m = re.fullmatch(r"\s*(\d+)\s*([A-Ca-c])\s*", str(label))
+    if not m:
+        raise ValueError(f"슬롯 라벨 형식은 <뱅크><A/B/C> (예 38B): {label!r}")
+    return (int(m.group(1)) - 1) * SLOTS_PER_BANK + _SLOT_LETTERS.index(m.group(2).upper())
+
+
+def parse_slot(s):
+    """문자열을 슬롯 인덱스로. 숫자(112/0x70) 또는 페달 라벨(38B) 모두 허용."""
+    s = str(s).strip()
+    try:
+        return int(s, 0)                 # '112', '0x70'
+    except ValueError:
+        return label_to_slot(s)          # '38B'
 
 
 def _name_payload(name):
-    """저장 프레임 payload = 이름(12B null-pad) + 고정 꼬리."""
+    """저장 프레임 payload = 이름(12B, null 종단 필수) + 고정 꼬리.
+
+    이름이 12바이트를 꽉 채우면 null 종단이 없어 장비가 꼬리바이트까지 이름으로
+    읽어버림(예: 12자 'thatBandTest' → 화면에 'thatBandTest`(9'). 그래서 최대 11자."""
     nb = name.encode("ascii")
-    if len(nb) > NAME_LEN:
-        raise ValueError(f"이름은 최대 {NAME_LEN}자: {name!r}")
+    if len(nb) > NAME_MAX:
+        raise ValueError(f"이름은 최대 {NAME_MAX}자(null 종단 필요): {name!r} ({len(nb)}자)")
     return nb + b"\x00" * (NAME_LEN - len(nb)) + _SAVE_TAIL
 
 
@@ -41,6 +75,12 @@ def save_preset(h, name, slot=SAVE_DEFAULT_SLOT):
     cmd = (slot << 8) | SAVE_OPCODE
     payload = _name_payload(name)
     return h.write(build_report(cmd, payload))
+
+
+def load_preset(h, slot):
+    """프리셋 슬롯을 활성화(로드). save_preset 전에 대상 슬롯을 워킹버퍼로 올릴 때 사용
+    (그래야 save가 그 슬롯에 커밋됨). cmd = (slot << 8) | 0xa6."""
+    return h.write(build_report((slot << 8) | LOAD_OPCODE, _LOAD_PAYLOAD))
 
 
 def _payload(enable, model, params):
