@@ -17,32 +17,12 @@ from fx150_spec import load_spec, para_steps
 SPEC = load_spec()
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# 큰 값(Hz/ms) 파라미터는 raw↔물리 매핑이 장비와 어긋나(실측 확인) 라벨을 못 믿는다.
-# 스텝>255 = 값이 1바이트를 넘는 주파수/시간 계열. 이런 건 안전한 값으로 고정하고
-# 최적화 대상에서 제외 → 결과 라벨 신뢰성 확보. (FX/OD/AMP/NS/REVERB는 영향 없음)
-LARGE_STEP_THRESHOLD = 255
-
-# 큰 값만 다루는 모델은 아예 제외 (대체 모델 존재).
+# 큰 값(Hz/ms) 파라미터는 BE 인코더(apply_preset)로 정확히 적용됨(실측 확인) — 더 이상
+# 고정 불필요. 단, 장비가 HID 쓰기를 무시하는 모델은 제외(대체 모델 있음).
 CHAIN_EXCLUDE_MODELS = {
-    "EQ":  {4},     # 4 BAND CUSTOM(FREQ 직접설정) → 6 BAND 고정주파수 모델 사용
-    "MOD": {14},    # LOFI(SAMPLE Hz)
+    "EQ":  {4},     # 4 BAND CUSTOM: FREQ 직접설정이 HID로 안 먹힘 → 6 BAND 고정주파수 사용
+    "MOD": {14},    # LOFI(SAMPLE Hz) — 미검증이라 보수적으로 제외
 }
-
-
-def _is_large(steps):
-    return steps > LARGE_STEP_THRESHOLD
-
-
-def _safe_large_value(chain, name):
-    """큰 값 파라미터의 안전 고정 raw값 (음악적으로 중립 = 효과 없음)."""
-    n = name.upper()
-    if "HI CUT" in n:        # 역인코딩: raw0 = 최고Hz = 하이컷 없음
-        return 0
-    if "CUT" in n:           # LOW CUT raw0 = 최저Hz = 로우컷 없음
-        return 0
-    if "TIME" in n:          # 딜레이 타임: 인코딩 안전한 소량(~120ms). SUB-D 동기 시 무시됨
-        return 100
-    return 0                 # 그 외 큰 값(FREQ/SAMPLE 등)
 
 
 def _model_params(chain, model_idx):
@@ -62,21 +42,10 @@ def _suggest_model(trial, chain):
     return trial.suggest_categorical(f"{chain}.model", allowed)
 
 
-def _is_frozen_large(chain, steps):
-    """고정해야 하는 큰 값인가. CAB 컷(LOW/HI CUT)은 실측상 정상이라 최적화하고,
-    DELAY TIME만 고정(템포동기 + F.BACK 바이트 누수 이슈로 raw 의미 불명확)."""
-    return _is_large(steps) and chain == "DELAY"
-
-
 def _suggest_params(trial, chain, model):
-    """모델 파라미터 제안. 고정 대상 큰 값(DELAY TIME)만 안전값으로 고정."""
-    out = []
-    for nm, steps in _model_params(chain, model):
-        if _is_frozen_large(chain, steps):
-            out.append(_safe_large_value(chain, nm))
-        else:
-            out.append(trial.suggest_int(f"{chain}.{nm}", 0, steps))
-    return out
+    """모델 파라미터 제안 (전부 탐색 — BE 인코더로 큰 값도 정확히 적용됨)."""
+    return [trial.suggest_int(f"{chain}.{nm}", 0, steps)
+            for nm, steps in _model_params(chain, model)]
 
 
 def suggest(trial, chains_config):
@@ -187,17 +156,13 @@ def _build_enqueue(fine_config, best_a):
     for chain, mode in fine_config.items():
         if isinstance(mode, tuple) and mode[0] == "fix":
             model = mode[1]
-            for i, (nm, steps) in enumerate(_model_params(chain, model)):
-                if _is_frozen_large(chain, steps):   # 고정값(미탐색) → enqueue 제외
-                    continue
+            for i, (nm, _) in enumerate(_model_params(chain, model)):
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
         elif mode == "optimize_or_bypass":
             # enable=1이 살아남은 경우
             enqueue[f"{chain}.enable"] = 1
             model = best_a[chain]["model"]
-            for i, (nm, steps) in enumerate(_model_params(chain, model)):
-                if _is_frozen_large(chain, steps):
-                    continue
+            for i, (nm, _) in enumerate(_model_params(chain, model)):
                 enqueue[f"{chain}.{nm}"] = best_a[chain]["params"][i]
     return enqueue
 
