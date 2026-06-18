@@ -24,6 +24,41 @@ CHAIN_EXCLUDE_MODELS = {
     "MOD": {14},    # LOFI(SAMPLE Hz) — 미검증이라 보수적으로 제외
 }
 
+# 모델 허용목록(allowlist). 비면 전체 탐색. 게인 레벨 prior로 채워 Stage A 탐색공간을 좁힘.
+# {chain: [model_idx...]}. main.py가 --gain-level 받아 채움.
+CHAIN_INCLUDE_MODELS = {}
+
+# 게인 레벨(오름차순). AMP 모델을 캐릭터별로 묶어 Stage A가 곡에 안 맞는 모델을 안 훑게.
+GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
+# 접미사(CL/CR/OD/DS)로 안 잡히는 채널/베어네임 보정(키워드 → 티어, 위에서부터 우선).
+_AMP_TIER_KEYWORD = [
+    ("metal",    ("5153 RED", "ECSTATIC RED", "SEVERE", "POWER DS", "SOLO 100",
+                  "HERBART CH3", "ARCHEAN 100 DS")),
+    ("crunch",   ("PLEXI", "J800", "5153 BLUE", "ECSTATIC BLUE", "HERBART CH2")),
+    ("clean",    ("65 DR", "65 TR", "BASSGUY", "5153 GREEN", "ECSTATIC GREEN")),
+]
+
+
+def _amp_tier(name):
+    """AMP 모델 이름 → 게인 티어. 키워드 우선, 그 다음 접미사(CL/CR/OD/DS)."""
+    u = name.split(":", 1)[-1].strip().upper()
+    for tier, kws in _AMP_TIER_KEYWORD:
+        if any(k in u for k in kws):
+            return tier
+    toks = u.split()
+    for suf, tier in (("CL", "clean"), ("CR", "crunch"),
+                      ("OD", "overdrive"), ("DS", "distortion")):
+        if suf in toks:
+            return tier
+    return "distortion"   # 기본(분류 안 되면 보수적으로 하이게인 쪽)
+
+
+def amp_models_for_levels(levels):
+    """선택한 게인 레벨들에 해당하는 AMP 모델 인덱스(1-based) 리스트."""
+    want = set(levels)
+    return [i for i, m in enumerate(SPEC["AMP"]["models"], 1)
+            if _amp_tier(m["name"]) in want]
+
 # 특정 파라미터를 고정값으로 핀(탐색 제외). {chain: {param_name: value}}.
 # DELAY SUB-D: OFF(0)가 아니면 raw TIME(ms)을 무시하고 장비 BPM 템포동기로 덮어써
 # 곡과 무관하게 딜레이가 제멋대로 울림. OFF로 고정해 TIME이 항상 적용되게(예측 가능,
@@ -41,12 +76,16 @@ def _model_params(chain, model_idx):
 
 
 def _suggest_model(trial, chain):
-    """모델 선택. 제외 목록 있으면 categorical로 허용 모델만."""
+    """모델 선택. 허용목록(CHAIN_INCLUDE_MODELS) 있으면 그 안에서, 없으면 전체.
+    제외목록(CHAIN_EXCLUDE_MODELS)은 항상 빼고 categorical로 샘플."""
     n = len(SPEC[chain]["models"])
-    exclude = CHAIN_EXCLUDE_MODELS.get(chain)
-    if not exclude:
-        return trial.suggest_int(f"{chain}.model", 1, n)
-    allowed = [m for m in range(1, n + 1) if m not in exclude]
+    base = CHAIN_INCLUDE_MODELS.get(chain) or list(range(1, n + 1))
+    exclude = CHAIN_EXCLUDE_MODELS.get(chain, set())
+    allowed = [m for m in base if m not in exclude]
+    if not allowed:                       # prior가 전부 제외하면 안전하게 전체로
+        allowed = [m for m in range(1, n + 1) if m not in exclude]
+    if len(allowed) == 1:
+        return allowed[0]
     return trial.suggest_categorical(f"{chain}.model", allowed)
 
 

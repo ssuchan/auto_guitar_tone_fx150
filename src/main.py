@@ -17,7 +17,8 @@ import time
 import shutil
 import datetime
 import argparse
-from optimizer import staged_optimize, print_importance
+import optimizer
+from optimizer import staged_optimize, print_importance, GAIN_LEVELS, amp_models_for_levels
 from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
                           load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
@@ -184,10 +185,25 @@ def main():
     ap.add_argument("--save-slot", default=None,
                     help="Preset slot to save into: number (112 / 0x70) or pedal label (38B). "
                          "Omit to auto-assign the next free slot (tracked in preset_slots.json).")
+    ap.add_argument("--gain-level", default=None,
+                    help="Restrict AMP model search by gain character (comma-separated, "
+                         f"multiple ok): {'/'.join(GAIN_LEVELS)}. Omit = search all 58 amps. "
+                         "Narrows Stage A so it skips amps that don't fit the song.")
     args = ap.parse_args()
 
     if args.save_name and len(args.save_name.encode("ascii", "ignore")) > NAME_MAX:
         ap.error(f"--save-name must be at most {NAME_MAX} ASCII characters")
+
+    # --gain-level: AMP 모델 탐색을 게인 캐릭터로 제한(Stage A 효율↑).
+    if args.gain_level:
+        levels = [s.strip().lower() for s in args.gain_level.split(",") if s.strip()]
+        bad = [l for l in levels if l not in GAIN_LEVELS]
+        if bad:
+            ap.error(f"--gain-level unknown: {bad}. choices: {GAIN_LEVELS}")
+        amp_idx = amp_models_for_levels(levels)
+        optimizer.CHAIN_INCLUDE_MODELS["AMP"] = amp_idx
+        total = len(optimizer.SPEC["AMP"]["models"])
+        print(f"AMP search restricted by gain-level {levels}: {len(amp_idx)}/{total} models")
 
     # --song: 곡별 작업 폴더. target/di 기본 경로를 그 폴더로, 결과도 그쪽에 저장.
     base = os.path.join(WORK, "songs", args.song) if args.song else WORK

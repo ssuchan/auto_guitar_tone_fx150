@@ -47,7 +47,8 @@ def youtube_title(url):
     """yt_dlp 파이썬 API로 영상 제목 가져옴(다운로드 없이). 실패 시 None."""
     try:
         from yt_dlp import YoutubeDL
-        with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+        with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
+                        "noplaylist": True}) as ydl:
             return ydl.extract_info(url, download=False).get("title")
     except Exception as e:
         print(f"  (제목 가져오기 실패: {e})")
@@ -55,8 +56,16 @@ def youtube_title(url):
 
 
 def download_audio(url, out_wav):
+    # 이전 스크래치 제거 — 안 그러면 yt-dlp가 "already downloaded"로 다른 영상 잔재를 재사용.
+    import glob as _glob
+    for f in _glob.glob(out_wav.replace(".wav", ".*")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
     # yt-dlp CLI는 PATH에 없을 수 있어 python -m yt_dlp 로 호출(모듈은 설치돼 있음).
-    cmd = [sys.executable, "-m", "yt_dlp", "-x", "--audio-format", "wav",
+    # --no-playlist: &list=...(라디오/재생목록) 링크여도 그 동영상 1개만 받음.
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-x", "--audio-format", "wav",
            "--audio-quality", "0", "-o", out_wav.replace(".wav", ".%(ext)s"), url]
     ffmpeg = _ffmpeg_exe()
     if ffmpeg:
