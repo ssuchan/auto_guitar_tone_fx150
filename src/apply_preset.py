@@ -15,37 +15,29 @@ from fx150_spec import load_spec, CHAIN_CMD, para_steps
 SPEC = load_spec()
 
 
-def _param_kinds(chain, model):
-    """체인/모델 파라미터의 kind 리스트('cont'/'enum'). 조회 실패 시 빈 리스트."""
-    try:
-        return [p["kind"] for p in SPEC[chain]["models"][model - 1]["paras"]]
-    except (KeyError, IndexError, TypeError):
-        return []
+def _payload(enable, model, params):
+    """HID payload 바이트.
 
-
-def _payload(chain, enable, model, params):
+    실측(USBPcap 캡처 + 본체 화면): 디바이스는 enable(2B LE) + model(1B) +
+    각 파라미터를 2바이트 빅엔디언으로 읽는다. 작은 값(<256)은 빅엔디언이든
+    리틀엔디언이든 바이트가 같아 AMP/EQ가 우연히 동작했고, 큰 값(Hz/ms)은
+    LE로 보내면 상위바이트가 다음 파라미터로 새어든다(본체에서 확인).
+    AMP/FX/CAB 캡처 프레임을 바이트 단위로 재현함."""
     p = bytearray()
     p += int(enable).to_bytes(2, "little")
-    p += int(model).to_bytes(2, "little")
-    kinds = _param_kinds(chain, model)
-    for i, v in enumerate(params):
-        if i < len(kinds) and kinds[i] == "enum":
-            # enum(예: CAB TUBE, DELAY SUB-D)은 인덱스를 상위바이트에 (에디터 USB 캡처 실측)
-            p += bytes([0x00, int(v) & 0xFF])
-        else:
-            p += int(v).to_bytes(2, "little")   # 연속값: 일반 LE (LOW CUT 등 실측 확인)
-    if p and p[-1] == 0x00:   # 에디터 동작: 끝 0x00 한 개 생략
-        p = p[:-1]
+    p += bytes([int(model) & 0xFF])
+    for v in params:
+        p += int(v).to_bytes(2, "big")
     return bytes(p)
 
 
 def encode_module(chain, enable, model, params):
     """체인 모듈 -> HID 프레임 바이트(byte0/패딩 제외)."""
-    return build_frame(CHAIN_CMD[chain], _payload(chain, enable, model, params))
+    return build_frame(CHAIN_CMD[chain], _payload(enable, model, params))
 
 
 def encode_report(chain, enable, model, params):
-    return build_report(CHAIN_CMD[chain], _payload(chain, enable, model, params))
+    return build_report(CHAIN_CMD[chain], _payload(enable, model, params))
 
 
 def apply_candidate(h, candidate, delay=0.5, param_delay=None, prev=None):
