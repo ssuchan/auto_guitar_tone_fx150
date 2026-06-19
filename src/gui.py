@@ -12,6 +12,7 @@
 """
 import os
 import sys
+import json
 import queue
 import threading
 import subprocess
@@ -20,6 +21,7 @@ from tkinter import ttk, scrolledtext, messagebox
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 프로젝트 루트
 SRC = os.path.join(ROOT, "src")
+STATE_FILE = os.path.join(ROOT, "work", "gui_state.json")  # 폼 상태 저장(껐다 켜도 복원)
 CREATE_NO_WINDOW = 0x08000000   # subprocess가 콘솔창을 안 띄우게
 
 
@@ -79,7 +81,35 @@ class App:
         self.worker = None
         root.title("auto_guitar_tone — FX150 톤 학습")
         self._build()
+        self._load_state()                                   # 이전 폼 값 복원
+        root.protocol("WM_DELETE_WINDOW", self._on_close)     # 닫을 때 저장
         self.root.after(100, self._drain)
+
+    def _load_state(self):
+        try:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        for k, var in self.v.items():
+            if isinstance(data.get(k), str):
+                var.set(data[k])
+        for k, var in self.gain_levels.items():
+            var.set(bool(data.get("gain_levels", {}).get(k, False)))
+
+    def _save_state(self):
+        data = {k: var.get() for k, var in self.v.items()}
+        data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def _on_close(self):
+        self._save_state()
+        self.root.destroy()
 
     def _build(self):
         frm = ttk.Frame(self.root, padding=10)
@@ -224,6 +254,7 @@ class App:
             messagebox.showerror("재생 오류", str(e))
 
     def _run_cmds(self, cmds):
+        self._save_state()                  # 시작 시점 상태 저장(이어서 학습 가능)
         self.btn.config(state="disabled")
         self.rec_btn.config(state="disabled")
         self.worker = threading.Thread(target=self._run_all, args=(cmds,), daemon=True)
