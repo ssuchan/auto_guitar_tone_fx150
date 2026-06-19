@@ -137,40 +137,23 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
 
 
 def riff_match(di, target):
-    """DI 녹음과 타겟의 리프 일치도 추정. DI를 타겟에 맞춰(같은 템포/타이밍) 녹음하면
-    학습이 잘 됨(내용 매칭이 핵심, 실측). 반환 dict:
-      tempo_di/tempo_tg(BPM), tempo_pct(템포 일치% — 신뢰 가능),
-      note_pct(chroma DTW 음정 유사% — ※부정확. 기타 리프는 서로 비슷해 같은리프/다른
-               리프 변별이 약함(실측 89 vs 84). 게이트 금지, 귀로 확인 보조용)."""
+    """DI 녹음과 타겟의 템포 비교. 반환: tempo_di/tempo_tg(BPM), tempo_pct.
+
+    ※노트(음) 일치 자동측정은 뺐음 — chroma 유사도가 같은리프/다른리프 변별이 약해
+    (실측 89 vs 84, 파워코드·딴리프도 80%대) 가짜 확신만 줌. 음 일치는 귀로 확인.
+    템포도 가끔 half/double 추정오류가 있으니 BPM 숫자를 같이 보고 판단."""
     import librosa
 
-    def _ld(p):
-        if isinstance(p, str):
-            y, _ = librosa.load(p, sr=SR, mono=True)
-        else:
-            y = np.asarray(p, dtype=np.float32)
-        return y / (np.sqrt(np.mean(y ** 2)) + 1e-9)
-
-    def _tempo(y):
+    def _tempo(p):
+        y = (librosa.load(p, sr=SR, mono=True)[0] if isinstance(p, str)
+             else np.asarray(p, dtype=np.float32))
         oe = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP)
         return float(np.atleast_1d(
             librosa.feature.tempo(onset_envelope=oe, sr=SR, hop_length=HOP))[0])
 
-    yd, yt = _ld(di), _ld(target)
-    td, tt = _tempo(yd), _tempo(yt)
+    td, tt = _tempo(di), _tempo(target)
     tempo_pct = 100.0 * (1 - min(abs(td - tt) / max(td, tt, 1.0), 1.0))
-    Cd = librosa.feature.chroma_cqt(y=yd, sr=SR, hop_length=HOP)
-    Ct = librosa.feature.chroma_cqt(y=yt, sr=SR, hop_length=HOP)
-    # 길이가 달라도 정렬: 짧은 쪽을 긴 쪽 안에서 찾는다(subsequence DTW). DI가 타겟보다
-    # 길든 짧든 둘 다 처리. 코사인 유사도는 대칭이라 X/Y 순서 무관.
-    X, Y = (Cd, Ct) if Cd.shape[1] <= Ct.shape[1] else (Ct, Cd)
-    sub = X.shape[1] < Y.shape[1] * 0.8
-    _, wp = librosa.sequence.dtw(X=X, Y=Y, subseq=sub, metric="cosine")
-    sims = [float(np.dot(X[:, i], Y[:, j]) /
-                  (np.linalg.norm(X[:, i]) * np.linalg.norm(Y[:, j]) + 1e-9))
-            for i, j in wp]
-    return {"tempo_di": td, "tempo_tg": tt, "tempo_pct": tempo_pct,
-            "note_pct": 100.0 * float(np.mean(sims))}
+    return {"tempo_di": td, "tempo_tg": tt, "tempo_pct": tempo_pct}
 
 
 if __name__ == "__main__":

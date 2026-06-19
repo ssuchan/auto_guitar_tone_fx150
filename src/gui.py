@@ -309,11 +309,10 @@ class App:
                 from tone_loss import riff_match
                 r = riff_match(di, tg)
                 self.q.put(("log",
-                    "[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM) | "
-                    "노트 %.0f%% (참고·부정확)\n"
-                    "  ※ 템포는 신뢰 가능, 노트%%는 기타 리프 특성상 부정확. "
-                    "최종은 '타겟 듣기'로 귀로 확인하세요.\n"
-                    % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"], r["note_pct"])))
+                    "[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM)\n"
+                    "  ※ BPM 숫자가 비슷하면 OK(둘이 ~2배 차이면 추정오류). 음(노트) "
+                    "일치는 자동측정 신뢰불가 → '타겟 듣기'로 귀로 확인하세요.\n"
+                    % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"])))
             except Exception as e:
                 self.q.put(("log", f"[리프 체크] 실패: {e}\n"))
 
