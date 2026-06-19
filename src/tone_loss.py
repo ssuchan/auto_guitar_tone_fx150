@@ -81,6 +81,10 @@ def features(x, sr_in=None):
     roll = librosa.feature.spectral_rolloff(S=S, sr=SR)
     flat = librosa.feature.spectral_flatness(S=S)
     env = _envelope(S)
+    # crest factor(dB): y는 _load에서 rms=1로 정규화됨 → peak가 곧 crest. 디스토션은
+    # 다이내믹을 압축해 crest를 낮춘다(clean=높음). 옵티마이저가 clean 타겟에 디스토션을
+    # 처박는 걸 막는 직접 신호(스펙트럼 특징은 디스토션으로 우회 가능). 99.5%로 스파이크 둔감.
+    crest = 20.0 * float(np.log10(np.percentile(np.abs(y), 99.5) + 1e-9))
     return {
         "ltas": ltas,
         "mfcc_mean": mfcc.mean(axis=1),
@@ -89,6 +93,7 @@ def features(x, sr_in=None):
         "centroid": float(cent.mean()),
         "rolloff": float(roll.mean()),
         "flatness": float(flat.mean()),
+        "crest": crest,                      # crest factor(dB) — 디스토션/압축 정도
         "env_ac": _env_autocorr(env),        # 딜레이/리버브(시간 자기유사성)
         "mod_spec": _mod_spectrum(env),      # 트레몰로/코러스/시간 질감
     }
@@ -103,6 +108,7 @@ W = {
     "centroid":  0.8,
     "rolloff":   0.3,
     "flatness":  0.5,
+    "crest":     2.0,   # 디스토션/압축(crest factor) — clean에 디스토션 처박는 것 방지(잠정)
     "env_ac":    1.5,   # 딜레이/리버브 (시간 자기상관) — 합성검증으로 보정
     "mod_spec":  8.0,   # 변조 스펙트럼(정규화라 값이 작아 가중↑)
 }
@@ -122,6 +128,8 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / nyq
     parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / nyq
     parts["flatness"] = abs(fa["flatness"] - fb["flatness"]) * 5
+    # crest factor(dB) 차이를 ~12dB 스케일로 정규화(clean~14 vs 디스토션~7dB대 실측 근사)
+    parts["crest"] = abs(fa["crest"] - fb["crest"]) / 12.0
     parts["env_ac"] = float(np.sqrt(np.mean((fa["env_ac"] - fb["env_ac"]) ** 2)))
     parts["mod_spec"] = float(np.sqrt(np.mean((fa["mod_spec"] - fb["mod_spec"]) ** 2)))
     dist = sum(W[k] * parts[k] for k in parts)

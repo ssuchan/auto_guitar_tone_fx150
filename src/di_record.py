@@ -83,6 +83,12 @@ def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None):
     sd.wait()
     rec = np.asarray(rec)
     mono = rec.mean(axis=1) if rec.ndim > 1 else rec
+    # 녹음 시작 pop/click 제거(첫 200ms). sd.rec 스트림 시작 트랜지언트가 파일 맨 앞에
+    # 큰 스파이크로 박혀 정규화 peak까지 먹고 'DI 듣기'에 팝 소리로 들림(실측). 카운트다운
+    # 후라 이 구간은 아직 무음이므로 잘라도 연주 손실 없음.
+    head = int(sr * 0.2)
+    if len(mono) > head * 2:
+        mono = mono[head:]
     rms = float(np.sqrt(np.mean(mono ** 2)))
     peak = float(np.max(np.abs(mono)))
 

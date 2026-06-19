@@ -49,7 +49,8 @@ def parse_time(s):
 GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 
 
-def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot, gain_levels=None):
+def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
+                   gain_levels=None, calibrate=False):
     """(라벨, argv) 리스트 생성. url 있으면 fetch 먼저, 그 다음 학습."""
     cmds = []
     if url:
@@ -63,6 +64,8 @@ def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot, gain_
         cmds.append(("다운로드 + 기타 분리", fetch))
     train = [py, "-u", os.path.join(SRC, "main.py"), "--song", song,
              "--trials", str(s1), "--stage2-trials", str(s2), "--play-gain", str(gain)]
+    if calibrate:
+        train += ["--calibrate"]
     if name:
         train += ["--save-name", name]
     if slot:
@@ -98,11 +101,13 @@ class App:
         for k, var in self.gain_levels.items():
             var.set(bool(data.get("gain_levels", {}).get(k, False)))
         self.auto_gl.set(bool(data.get("auto_gl", False)))
+        self.calibrate.set(bool(data.get("calibrate", False)))
 
     def _save_state(self):
         data = {k: var.get() for k, var in self.v.items()}
         data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
         data["auto_gl"] = self.auto_gl.get()
+        data["calibrate"] = self.calibrate.get()
         try:
             os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -142,7 +147,14 @@ class App:
         field(2, "곡 제목 (폴더명)", "song")
         field(3, "Stage1 횟수", "s1", "100", 10)
         field(4, "Stage2 횟수", "s2", "50", 10)
-        field(5, "play-gain", "gain", "0.4", 10)
+        # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
+        ttk.Label(frm, text="play-gain").grid(row=5, column=0, sticky="e", padx=4, pady=3)
+        self.v["gain"] = tk.StringVar(value="0.4")
+        ttk.Entry(frm, textvariable=self.v["gain"], width=8).grid(row=5, column=1, sticky="w", padx=4)
+        self.calibrate = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="자동보정(클리핑방지)", variable=self.calibrate).grid(
+            row=5, column=2, columnspan=2, sticky="w", padx=4)
+
         field(6, "저장 이름 (≤11자)", "name")
         field(7, "슬롯 (예 38A, 비우면 자동)", "slot")
 
@@ -212,7 +224,7 @@ class App:
             [lv for lv, v in self.gain_levels.items() if v.get()]
         cmds = build_commands(self.py, url=url, start=start, end=end, song=song,
                               s1=s1, s2=s2, gain=gain, name=name, slot=slot,
-                              gain_levels=levels)
+                              gain_levels=levels, calibrate=self.calibrate.get())
         self.btn.config(text="학습 중...")
         self._run_cmds(cmds)
 
@@ -267,10 +279,16 @@ class App:
         p = self.proc
         if p and p.poll() is None:
             self._append("\n[중지] 종료 중...\n")
-            try:   # /T: 자식까지, /F: 강제 — terminate()보다 확실히 죽임
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+            killed = False
+            try:   # /T: 자식까지, /F: 강제. taskkill이 PATH에 없어 풀경로로 호출.
+                taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                        "System32", "taskkill.exe")
+                subprocess.run([taskkill, "/F", "/T", "/PID", str(p.pid)],
                                creationflags=CREATE_NO_WINDOW)
-            except Exception:
+                killed = True
+            except Exception as e:
+                self._append(f"[중지] taskkill 실패({e}) → kill() 시도\n")
+            if not killed:
                 try:
                     p.kill()
                 except Exception:
@@ -299,9 +317,11 @@ class App:
                 self.q.put(("log", f"[실행 실패] {e}\n"))
                 ok = False
                 break
+            self.proc = p          # 중지 버튼이 죽일 수 있게 핸들 보관(이게 없어 중지 안 됐음)
             for line in p.stdout:
                 self.q.put(("log", line))
             p.wait()
+            self.proc = None
             if p.returncode != 0:
                 self.q.put(("log", f"\n[{label} 실패: exit {p.returncode}]\n"))
                 ok = False

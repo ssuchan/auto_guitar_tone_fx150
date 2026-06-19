@@ -71,8 +71,9 @@ DEFAULT_CHAINS = {
     "REVERB":"bypass",
 }
 
-# Stage 2: MOD/DELAY/REVERB도 bypass 포함해서 선택적으로 탐색
-STAGE2_CHAINS = {"MOD", "DELAY", "REVERB"}
+# Stage 2: DELAY/REVERB만 선택적으로 탐색. MOD는 제외(피치/페이저 등 엉뚱한 게 자주
+# 골라져 기본 톤을 망침 → 항상 bypass 유지). 필요하면 여기 "MOD" 다시 추가.
+STAGE2_CHAINS = {"DELAY", "REVERB"}
 
 
 def _make_stage2_config(best1):
@@ -166,8 +167,13 @@ def main():
     ap.add_argument("--stage2-trials", type=int, default=50,
                     help="Stage 2 MOD/DELAY/REVERB trials. 0=skip (default 50)")
     ap.add_argument("--play-gain", type=float, default=0.4,
-                    help="DI playback gain into FX150. 너무 높으면 입력단 오버드라이브"
-                         "(클린도 찌그러짐)+클리핑. DI는 정규화되니 0.4 고정으로 대부분 OK (default 0.4)")
+                    help="DI playback gain into FX150. 캡처 클리핑 나면 낮춰라. DI는 "
+                         "정규화되니 0.4로 대부분 OK. --calibrate로 자동보정 가능 (default 0.4)")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="학습 전 baseline(클린) 캡처로 play-gain 자동보정 → 캡처 클리핑 방지"
+                         "(곡/DI레벨/장비감도 무관). pop 제거된 peak 기준이라 신뢰성 있음")
+    ap.add_argument("--calibrate-peak", type=float, default=0.35,
+                    help="--calibrate의 baseline 목표 peak. 낮을수록 시끄러운 프리셋 헤드룸↑ (default 0.35)")
     ap.add_argument("--apply-delay", type=float, default=0.5,
                     help="HID module send interval (s). Prevents model-load drops (default 0.5)")
     ap.add_argument("--param-delay", type=float, default=0.1,
@@ -228,6 +234,12 @@ def main():
             optimizer.CHAIN_INCLUDE_MODELS["OD"] = od_idx
         print(f"gain-level {levels}: AMP {len(amp_idx)}/{total}, OD {len(od_idx)}/"
               f"{len(optimizer.SPEC['OD']['models'])} models")
+        # GAIN 노브 상한도 제한(모델 제한만으론 GAIN 처박아 clean도 깨짐 — 실측).
+        cap = optimizer.gain_cap_for_levels(levels)
+        if cap < 1.0:
+            optimizer.CHAIN_PARAM_CAP["AMP"] = {"GAIN": (0.0, cap)}
+            optimizer.CHAIN_PARAM_CAP["OD"] = {"GAIN": (0.0, cap)}
+            print(f"gain-level {levels}: GAIN knob cap = {cap*100:.0f}% of range (AMP+OD)")
 
     if args.mock:
         ev = _MockEvaluator()
@@ -246,6 +258,10 @@ def main():
     results = []
 
     try:
+        # ── 캘리브레이션: play-gain 자동보정 (베이스라인 전에) ─────────────
+        if not args.mock and ev.h is not None and args.calibrate:
+            ev.calibrate_play_gain(target_peak=args.calibrate_peak)
+
         # ── Stage 0: 베이스라인 초기화 ────────────────────────────────────
         # 빈 프리셋에서 시작해도 전 체인을 알려진 상태로 맞춤(FXLOOP 등 최적화 비대상 포함).
         # 반환을 ev.prev로 두면 Stage 1 첫 trial이 변경분만 전송 → 가속.

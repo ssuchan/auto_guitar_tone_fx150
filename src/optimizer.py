@@ -28,6 +28,10 @@ CHAIN_EXCLUDE_MODELS = {
 # {chain: [model_idx...]}. main.py가 --gain-level 받아 채움.
 CHAIN_INCLUDE_MODELS = {}
 
+# 파라미터 탐색범위 제한(전체범위 대비 비율). {chain: {param_name: (lo_frac, hi_frac)}}.
+# main.py가 --gain-level로 채움(GAIN 노브 상한). 비면 0~max 전체 탐색.
+CHAIN_PARAM_CAP = {}
+
 # 게인 레벨(오름차순). AMP 모델을 캐릭터별로 묶어 Stage A가 곡에 안 맞는 모델을 안 훑게.
 GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 # 접미사(CL/CR/OD/DS)로 안 잡히는 채널/베어네임 보정(키워드 → 티어, 위에서부터 우선).
@@ -85,6 +89,21 @@ def od_models_for_levels(levels):
             if _od_tier(m["name"]) in want]
 
 
+# 게인레벨별 GAIN 노브 상한(전체범위 대비 비율). 모델 제한만으론 GAIN 노브가 자유라
+# clean 앰프를 골라도 옵티마이저가 GAIN을 처박아 디스토션을 만든다(실측: clean 곡인데
+# 째지는 메탈톤). 레벨에 맞게 GAIN(=AMP/OD 드라이브)의 탐색 상한을 제한해 막는다.
+GAIN_CAP_BY_LEVEL = {
+    "clean": 0.35, "crunch": 0.55, "overdrive": 0.75,
+    "distortion": 0.92, "metal": 1.0,
+}
+
+
+def gain_cap_for_levels(levels):
+    """선택 레벨 중 가장 관대한(높은) GAIN 상한 비율. 모르면 1.0(제한 없음)."""
+    caps = [GAIN_CAP_BY_LEVEL[l] for l in levels if l in GAIN_CAP_BY_LEVEL]
+    return max(caps) if caps else 1.0
+
+
 def estimate_gain_levels(target):
     """target.wav 왜곡도(crest factor)로 게인레벨을 추정 → 넓은 3티어 윈도우(근사).
 
@@ -140,10 +159,20 @@ def _suggest_model(trial, chain):
 
 
 def _suggest_params(trial, chain, model):
-    """모델 파라미터 제안. PARAM_PIN에 있는 파라미터는 고정값(탐색 안 함)."""
+    """모델 파라미터 제안. PARAM_PIN=고정값(탐색X), CHAIN_PARAM_CAP=탐색범위 비율제한."""
     pins = PARAM_PIN.get(chain, {})
-    return [pins[nm] if nm in pins else trial.suggest_int(f"{chain}.{nm}", 0, steps)
-            for nm, steps in _model_params(chain, model)]
+    caps = CHAIN_PARAM_CAP.get(chain, {})
+    out = []
+    for nm, steps in _model_params(chain, model):
+        if nm in pins:
+            out.append(pins[nm])
+        elif nm in caps:
+            lo_f, hi_f = caps[nm]
+            lo, hi = round(lo_f * steps), round(hi_f * steps)
+            out.append(trial.suggest_int(f"{chain}.{nm}", lo, hi))
+        else:
+            out.append(trial.suggest_int(f"{chain}.{nm}", 0, steps))
+    return out
 
 
 def suggest(trial, chains_config):
