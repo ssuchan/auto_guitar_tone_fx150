@@ -5,8 +5,8 @@
 - yt-dlp로 오디오 추출 (wav)
 - 선택 구간 잘라냄 (보컬/드럼 적은 기타 구간 고르면 분리 품질 ↑)
   예) 2:45~3:05 구간 = start_sec=165, dur_sec=20
-- Demucs(htdemucs) 파이썬 API로 분리 → 일렉기타는 'other' stem에 주로 존재
-  (Demucs는 기타 전용 stem 없음 — other = 드럼/베이스/보컬 제외 나머지)
+- Demucs(htdemucs_6s) 파이썬 API로 분리 → 'guitar' 전용 stem 추출(기타 없으면 'other'
+  폴백). 6s 모델은 기타 stem이 있어 톤매칭 floor가 낮음(실측 7.2→5.6).
 - 출력: --song 주면 work/songs/<NAME>/target.wav, 아니면 work/target_guitar.wav
 
 주의: 첫 실행 시 Demucs 모델(~수백MB) 자동 다운로드, CPU 분리는 곡당 수 분.
@@ -83,15 +83,17 @@ def trim(in_wav, out_wav, start, dur):
 
 
 def separate(in_wav):
-    """htdemucs로 분리 → 'other'(기타 위주) stem을 모노 float 배열로 반환.
+    """htdemucs_6s로 분리 → 'guitar' 전용 stem을 모노 float 배열로 반환.
 
-    demucs 파이썬 API 사용 (CLI 저장 경로는 torchaudio/torchcodec 의존으로 깨짐).
+    6s 모델은 기타 전용 stem이 있어 'other'(기타+키보드+누설)보다 깨끗 → 톤매칭
+    floor 낮음(실측: ThatBand best loss 7.2→5.6). 단 기타가 거의 없는 곡이면 guitar
+    stem이 비니 'other'로 폴백. demucs 파이썬 API 사용(CLI 저장경로 깨짐).
     """
     import torch
     from demucs.pretrained import get_model
     from demucs.apply import apply_model
 
-    model = get_model("htdemucs"); model.eval()
+    model = get_model("htdemucs_6s"); model.eval()
     y, _ = librosa.load(in_wav, sr=model.samplerate, mono=False)
     if y.ndim == 1:                       # 모노 -> 스테레오 복제 (모델은 2채널 기대)
         y = np.stack([y, y])
@@ -101,8 +103,15 @@ def separate(in_wav):
     with torch.no_grad():
         sources = apply_model(model, (wav - ref) / std, device="cpu")[0]
     sources = sources * std[0] + ref[0]
-    other = sources[model.sources.index("other")]
-    return other.mean(0).numpy()          # 모노화
+    guitar = sources[model.sources.index("guitar")].mean(0).numpy()
+    other = sources[model.sources.index("other")].mean(0).numpy()
+    g_rms = float(np.sqrt(np.mean(guitar ** 2)))
+    o_rms = float(np.sqrt(np.mean(other ** 2)))
+    if g_rms < 0.2 * o_rms:               # 기타 stem이 너무 약함 → 모델이 기타 못 찾음
+        print(f"  guitar stem 약함(rms={g_rms:.4f}) → 'other' 폴백")
+        return other
+    print(f"  guitar stem 사용 (rms={g_rms:.4f})")
+    return guitar
 
 
 def main():
