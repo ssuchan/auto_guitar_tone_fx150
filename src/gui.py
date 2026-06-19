@@ -79,6 +79,7 @@ class App:
         self.py = python_exe()
         self.q = queue.Queue()
         self.worker = None
+        self.proc = None
         root.title("auto_guitar_tone — FX150 톤 학습")
         self._build()
         self._load_state()                                   # 이전 폼 값 복원
@@ -169,7 +170,9 @@ class App:
             row=0, column=len(GAIN_LEVELS), padx=(12, 0))
 
         self.btn = ttk.Button(frm, text="학습하기", command=self._start)
-        self.btn.grid(row=10, column=0, columnspan=4, pady=8, sticky="we")
+        self.btn.grid(row=10, column=0, columnspan=3, pady=8, sticky="we")
+        self.stop_btn = ttk.Button(frm, text="중지", command=self._stop, state="disabled")
+        self.stop_btn.grid(row=10, column=3, pady=8, sticky="we")
 
         self.log = scrolledtext.ScrolledText(frm, width=92, height=20, state="disabled",
                                              font=("Consolas", 9))
@@ -259,10 +262,22 @@ class App:
         except Exception as e:
             messagebox.showerror("재생 오류", str(e))
 
+    def _stop(self):
+        self._stopping = True
+        p = self.proc
+        if p and p.poll() is None:
+            self._append("\n[중지] 프로세스 종료 중...\n")
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
     def _run_cmds(self, cmds):
         self._save_state()                  # 시작 시점 상태 저장(이어서 학습 가능)
+        self._stopping = False
         self.btn.config(state="disabled")
         self.rec_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
         self.worker = threading.Thread(target=self._run_all, args=(cmds,), daemon=True)
         self.worker.start()
 
@@ -299,7 +314,11 @@ class App:
                 elif kind == "done":
                     self.btn.config(state="normal", text="학습하기")
                     self.rec_btn.config(state="normal", text="DI 녹음")
-                    self._append("\n🎉 완료!\n" if payload else "\n실패/중단됨.\n")
+                    self.stop_btn.config(state="disabled")
+                    if getattr(self, "_stopping", False):
+                        self._append("\n■ 중지됨.\n")
+                    else:
+                        self._append("\n🎉 완료!\n" if payload else "\n실패/중단됨.\n")
         except queue.Empty:
             pass
         self.root.after(100, self._drain)
