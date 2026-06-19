@@ -22,6 +22,10 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 CHAIN_EXCLUDE_MODELS = {
     "EQ":  {4},     # 4 BAND CUSTOM: FREQ 직접설정이 HID로 안 먹힘 → 6 BAND 고정주파수 사용
     "MOD": {14},    # LOFI(SAMPLE Hz) — 미검증이라 보수적으로 제외
+    # CAB 31~80 = "IR XX: EMPTY" 빈 사용자 IR 슬롯. 임펄스 미로드라 선택 시 출력
+    # 무음(실측: 랜덤 CAB의 62.5%가 여기 걸려 가짜 '무음/wedge' 양산 + pause 오발동).
+    # 내장 캐비닛 1~30만 탐색.
+    "CAB": set(range(31, 81)),
 }
 
 # 모델 허용목록(allowlist). 비면 전체 탐색. 게인 레벨 prior로 채워 Stage A 탐색공간을 좁힘.
@@ -130,10 +134,12 @@ PARAM_PIN = {
     # 음량/메이크업 파라미터 고정. tone_loss가 rms로 정규화라 음량은 매칭에 무관 →
     # 탐색하면 무음(0 근처, loss 낭비)·클리핑(높음, 캡처 왜곡)만 유발. 일정한 건강 레벨로 박음.
     # (GAIN/TONE/BASS 등 음색 파라미터는 그대로 탐색)
-    "AMP": {"MASTER": 75},
-    "CAB": {"LEVEL": 75},
-    "OD":  {"VOLUME": 75},
-    "EQ":  {"LEVEL": 75},
+    # 75→50: 75는 clean 앰프조차 캡처를 풀스케일(peak 1.000)로 클리핑시켜 USB 캡처를
+    # 간헐적 idle로 무너뜨림(실측). 50으로 출력 헤드룸 확보(매칭은 rms정규화라 무해).
+    "AMP": {"MASTER": 50},
+    "CAB": {"LEVEL": 50},
+    "OD":  {"VOLUME": 50},
+    "EQ":  {"LEVEL": 50},
 }
 
 

@@ -169,11 +169,13 @@ def main():
     ap.add_argument("--play-gain", type=float, default=0.4,
                     help="DI playback gain into FX150. 캡처 클리핑 나면 낮춰라. DI는 "
                          "정규화되니 0.4로 대부분 OK. --calibrate로 자동보정 가능 (default 0.4)")
-    ap.add_argument("--calibrate", action="store_true",
+    ap.add_argument("--calibrate", action=argparse.BooleanOptionalAction, default=True,
                     help="학습 전 baseline(클린) 캡처로 play-gain 자동보정 → 캡처 클리핑 방지"
-                         "(곡/DI레벨/장비감도 무관). pop 제거된 peak 기준이라 신뢰성 있음")
-    ap.add_argument("--calibrate-peak", type=float, default=0.35,
-                    help="--calibrate의 baseline 목표 peak. 낮을수록 시끄러운 프리셋 헤드룸↑ (default 0.35)")
+                         "(곡/DI레벨/장비감도 무관). 시작 헬스체크도 겸함(무음=장치 wedge면 "
+                         "즉시 중단). 끄려면 --no-calibrate (default ON)")
+    ap.add_argument("--calibrate-peak", type=float, default=0.25,
+                    help="--calibrate의 baseline 목표 peak. 낮을수록 시끄러운 프리셋 헤드룸↑. "
+                         "distortion은 클린 대비 훨씬 뜨거워 0.25 권장 (default 0.25)")
     ap.add_argument("--apply-delay", type=float, default=0.5,
                     help="HID module send interval (s). Prevents model-load drops (default 0.5)")
     ap.add_argument("--param-delay", type=float, default=0.1,

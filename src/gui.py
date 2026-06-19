@@ -64,8 +64,8 @@ def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
         cmds.append(("다운로드 + 기타 분리", fetch))
     train = [py, "-u", os.path.join(SRC, "main.py"), "--song", song,
              "--trials", str(s1), "--stage2-trials", str(s2), "--play-gain", str(gain)]
-    if calibrate:
-        train += ["--calibrate"]
+    # main.py가 calibrate 기본 ON이므로, 체크박스 해제를 반영하려면 명시적으로 전달.
+    train += ["--calibrate"] if calibrate else ["--no-calibrate"]
     if name:
         train += ["--save-name", name]
     if slot:
