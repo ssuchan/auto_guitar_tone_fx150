@@ -110,8 +110,8 @@ def _best_segment(y, sr, seg_sec):
 class ReampEvaluator:
     """후보 -> tone_distance. 하드웨어 리앰프 루프."""
 
-    def __init__(self, di_wav, target_wav, play_device, settle=0.15, play_gain=1.0,
-                 apply_delay=0.5, param_delay=None, trim_sec=4.0):
+    def __init__(self, di_wav, target_wav, play_device, settle=0.08, play_gain=1.0,
+                 apply_delay=0.15, param_delay=None, trim_sec=4.0):
         self.di, self.di_sr = sf.read(di_wav, dtype="float32")
         if self.di.ndim > 1:
             self.di = self.di.mean(axis=1)

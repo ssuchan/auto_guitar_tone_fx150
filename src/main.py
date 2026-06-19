@@ -177,10 +177,12 @@ def main():
     ap.add_argument("--calibrate-peak", type=float, default=0.25,
                     help="--calibrate의 baseline 목표 peak. 낮을수록 시끄러운 프리셋 헤드룸↑. "
                          "distortion은 클린 대비 훨씬 뜨거워 0.25 권장 (default 0.25)")
-    ap.add_argument("--apply-delay", type=float, default=0.5,
-                    help="HID module send interval (s). Prevents model-load drops (default 0.5)")
-    ap.add_argument("--param-delay", type=float, default=0.1,
-                    help="Send interval (s) when only params change. Speeds up Stage B (default 0.1)")
+    ap.add_argument("--apply-delay", type=float, default=0.15,
+                    help="HID module send interval (s). 모델변경 2-pass 간격. 실측: 0.06까지도 "
+                         "정확 적용(밝기 gap 무너짐 없음) → 0.5는 과보수, 0.15로 단축 (default 0.15)")
+    ap.add_argument("--param-delay", type=float, default=0.06,
+                    help="Send interval (s) when only params change. 모델 로드 없어 더 짧아도 "
+                         "안전. Stage B 가속 (default 0.06)")
     ap.add_argument("--trim-di", type=float, default=4.0,
                     help="Length (s) of max-RMS DI segment. 0=use all (default 4.0)")
     ap.add_argument("--stage-a-sec", type=float, default=2.0,
