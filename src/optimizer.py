@@ -65,6 +65,13 @@ def amp_models_for_levels(levels):
 # 저장값=실제값). enum value=options 인덱스이므로 0='OFF'.
 PARAM_PIN = {
     "DELAY": {"SUB-D": 0, "SUB-D 1": 0, "SUB-D 2": 0},   # DUAL 모델은 SUB-D 1/2
+    # 음량/메이크업 파라미터 고정. tone_loss가 rms로 정규화라 음량은 매칭에 무관 →
+    # 탐색하면 무음(0 근처, loss 낭비)·클리핑(높음, 캡처 왜곡)만 유발. 일정한 건강 레벨로 박음.
+    # (GAIN/TONE/BASS 등 음색 파라미터는 그대로 탐색)
+    "AMP": {"MASTER": 75},
+    "CAB": {"LEVEL": 75},
+    "OD":  {"VOLUME": 75},
+    "EQ":  {"LEVEL": 75},
 }
 
 
