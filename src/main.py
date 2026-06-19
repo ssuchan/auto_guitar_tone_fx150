@@ -165,8 +165,9 @@ def main():
                     help="Stage 1 optimization trials (default 100)")
     ap.add_argument("--stage2-trials", type=int, default=50,
                     help="Stage 2 MOD/DELAY/REVERB trials. 0=skip (default 50)")
-    ap.add_argument("--play-gain", type=float, default=1.0,
-                    help="DI playback gain. Lower if clipping (default 1.0)")
+    ap.add_argument("--play-gain", type=float, default=0.4,
+                    help="DI playback gain into FX150. 너무 높으면 입력단 오버드라이브"
+                         "(클린도 찌그러짐)+클리핑. DI는 정규화되니 0.4 고정으로 대부분 OK (default 0.4)")
     ap.add_argument("--apply-delay", type=float, default=0.5,
                     help="HID module send interval (s). Prevents model-load drops (default 0.5)")
     ap.add_argument("--param-delay", type=float, default=0.1,

@@ -142,7 +142,7 @@ class App:
         field(2, "곡 제목 (폴더명)", "song")
         field(3, "Stage1 횟수", "s1", "100", 10)
         field(4, "Stage2 횟수", "s2", "50", 10)
-        field(5, "play-gain", "gain", "0.7", 10)
+        field(5, "play-gain", "gain", "0.4", 10)
         field(6, "저장 이름 (≤11자)", "name")
         field(7, "슬롯 (예 38A, 비우면 자동)", "slot")
 
