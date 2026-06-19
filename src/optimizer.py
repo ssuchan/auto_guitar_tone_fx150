@@ -59,6 +59,24 @@ def amp_models_for_levels(levels):
     return [i for i, m in enumerate(SPEC["AMP"]["models"], 1)
             if _amp_tier(m["name"]) in want]
 
+
+def estimate_gain_levels(target):
+    """target.wav 왜곡도(crest factor)로 게인레벨을 추정 → 넓은 3티어 윈도우(근사).
+
+    왜곡↑ = 다이내믹 압축 = crest↓ (실측: DS 앰프 타겟 ~12.6dB, 약왜곡 ~15dB).
+    분리 기타라 정확도 한계 → 정답 티어를 놓치지 않게 인접 3티어로 넓게 반환."""
+    import librosa
+    import numpy as np
+    y, _ = librosa.load(target, sr=44100, mono=True)
+    peak = float(np.max(np.abs(y)))
+    rms = float(np.sqrt(np.mean(y ** 2)))
+    crest = 20 * np.log10((peak + 1e-9) / (rms + 1e-9))
+    if crest < 13.5:
+        return crest, ["overdrive", "distortion", "metal"]
+    if crest < 16.5:
+        return crest, ["crunch", "overdrive", "distortion"]
+    return crest, ["clean", "crunch", "overdrive"]
+
 # 특정 파라미터를 고정값으로 핀(탐색 제외). {chain: {param_name: value}}.
 # DELAY SUB-D: OFF(0)가 아니면 raw TIME(ms)을 무시하고 장비 BPM 템포동기로 덮어써
 # 곡과 무관하게 딜레이가 제멋대로 울림. OFF로 고정해 TIME이 항상 적용되게(예측 가능,

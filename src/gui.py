@@ -96,10 +96,12 @@ class App:
                 var.set(data[k])
         for k, var in self.gain_levels.items():
             var.set(bool(data.get("gain_levels", {}).get(k, False)))
+        self.auto_gl.set(bool(data.get("auto_gl", False)))
 
     def _save_state(self):
         data = {k: var.get() for k, var in self.v.items()}
         data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
+        data["auto_gl"] = self.auto_gl.get()
         try:
             os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -162,6 +164,9 @@ class App:
             var = tk.BooleanVar(value=False)
             ttk.Checkbutton(gl, text=lv, variable=var).grid(row=0, column=c, padx=(0, 8))
             self.gain_levels[lv] = var
+        self.auto_gl = tk.BooleanVar(value=False)   # 타겟 분석으로 게인레벨 자동(수동 체크 무시)
+        ttk.Checkbutton(gl, text="auto(타겟분석)", variable=self.auto_gl).grid(
+            row=0, column=len(GAIN_LEVELS), padx=(12, 0))
 
         self.btn = ttk.Button(frm, text="학습하기", command=self._start)
         self.btn.grid(row=10, column=0, columnspan=4, pady=8, sticky="we")
@@ -200,7 +205,8 @@ class App:
             messagebox.showerror("입력 오류", str(e))
             return
 
-        levels = [lv for lv, v in self.gain_levels.items() if v.get()]
+        levels = ["auto"] if self.auto_gl.get() else \
+            [lv for lv, v in self.gain_levels.items() if v.get()]
         cmds = build_commands(self.py, url=url, start=start, end=end, song=song,
                               s1=s1, s2=s2, gain=gain, name=name, slot=slot,
                               gain_levels=levels)

@@ -194,12 +194,17 @@ def main():
     if args.save_name and len(args.save_name.encode("ascii", "ignore")) > NAME_MAX:
         ap.error(f"--save-name must be at most {NAME_MAX} ASCII characters")
 
-    # --gain-level: AMP 모델 탐색을 게인 캐릭터로 제한(Stage A 효율↑).
+    # --gain-level: AMP 모델 탐색을 게인 캐릭터로 제한(Stage A 효율↑). "auto"=타겟 분석.
     if args.gain_level:
         levels = [s.strip().lower() for s in args.gain_level.split(",") if s.strip()]
+        if levels == ["auto"]:
+            if not args.target or not os.path.exists(args.target):
+                ap.error("--gain-level auto는 --target(또는 --song 타겟)이 필요합니다")
+            crest, levels = optimizer.estimate_gain_levels(args.target)
+            print(f"gain-level auto: target crest={crest:.1f}dB → {levels}")
         bad = [l for l in levels if l not in GAIN_LEVELS]
         if bad:
-            ap.error(f"--gain-level unknown: {bad}. choices: {GAIN_LEVELS}")
+            ap.error(f"--gain-level unknown: {bad}. choices: {GAIN_LEVELS} (or 'auto')")
         amp_idx = amp_models_for_levels(levels)
         optimizer.CHAIN_INCLUDE_MODELS["AMP"] = amp_idx
         total = len(optimizer.SPEC["AMP"]["models"])
