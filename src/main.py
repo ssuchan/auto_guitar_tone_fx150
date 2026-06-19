@@ -194,7 +194,21 @@ def main():
     if args.save_name and len(args.save_name.encode("ascii", "ignore")) > NAME_MAX:
         ap.error(f"--save-name must be at most {NAME_MAX} ASCII characters")
 
-    # --gain-level: AMP 모델 탐색을 게인 캐릭터로 제한(Stage A 효율↑). "auto"=타겟 분석.
+    # --song: 곡별 작업 폴더. target/di 기본 경로를 그 폴더로, 결과도 그쪽에 저장.
+    base = os.path.join(WORK, "songs", args.song) if args.song else WORK
+    os.makedirs(base, exist_ok=True)
+    if args.song:
+        if not args.target:
+            args.target = os.path.join(base, "target.wav")
+        if not args.di:
+            song_di = os.path.join(base, "di.wav")   # 곡 맞춤 DI 우선
+            if os.path.exists(song_di):
+                args.di = song_di
+    if not args.di and os.path.exists(DEFAULT_DI):   # 최종 폴백: 기본 DI
+        args.di = DEFAULT_DI
+
+    # --gain-level: AMP/OD 탐색을 게인 캐릭터로 제한(Stage A 효율↑). "auto"=타겟 분석.
+    # (--song으로 target 해석된 뒤에 와야 auto가 target을 찾음)
     if args.gain_level:
         levels = [s.strip().lower() for s in args.gain_level.split(",") if s.strip()]
         if levels == ["auto"]:
@@ -213,19 +227,6 @@ def main():
             optimizer.CHAIN_INCLUDE_MODELS["OD"] = od_idx
         print(f"gain-level {levels}: AMP {len(amp_idx)}/{total}, OD {len(od_idx)}/"
               f"{len(optimizer.SPEC['OD']['models'])} models")
-
-    # --song: 곡별 작업 폴더. target/di 기본 경로를 그 폴더로, 결과도 그쪽에 저장.
-    base = os.path.join(WORK, "songs", args.song) if args.song else WORK
-    os.makedirs(base, exist_ok=True)
-    if args.song:
-        if not args.target:
-            args.target = os.path.join(base, "target.wav")
-        if not args.di:
-            song_di = os.path.join(base, "di.wav")   # 곡 맞춤 DI 우선
-            if os.path.exists(song_di):
-                args.di = song_di
-    if not args.di and os.path.exists(DEFAULT_DI):   # 최종 폴백: 기본 DI
-        args.di = DEFAULT_DI
 
     if args.mock:
         ev = _MockEvaluator()
