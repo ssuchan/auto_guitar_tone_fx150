@@ -161,10 +161,13 @@ def riff_match(di, target):
     tempo_pct = 100.0 * (1 - min(abs(td - tt) / max(td, tt, 1.0), 1.0))
     Cd = librosa.feature.chroma_cqt(y=yd, sr=SR, hop_length=HOP)
     Ct = librosa.feature.chroma_cqt(y=yt, sr=SR, hop_length=HOP)
-    sub = Cd.shape[1] < Ct.shape[1] * 0.8
-    _, wp = librosa.sequence.dtw(X=Cd, Y=Ct, subseq=sub, metric="cosine")
-    sims = [float(np.dot(Cd[:, i], Ct[:, j]) /
-                  (np.linalg.norm(Cd[:, i]) * np.linalg.norm(Ct[:, j]) + 1e-9))
+    # 길이가 달라도 정렬: 짧은 쪽을 긴 쪽 안에서 찾는다(subsequence DTW). DI가 타겟보다
+    # 길든 짧든 둘 다 처리. 코사인 유사도는 대칭이라 X/Y 순서 무관.
+    X, Y = (Cd, Ct) if Cd.shape[1] <= Ct.shape[1] else (Ct, Cd)
+    sub = X.shape[1] < Y.shape[1] * 0.8
+    _, wp = librosa.sequence.dtw(X=X, Y=Y, subseq=sub, metric="cosine")
+    sims = [float(np.dot(X[:, i], Y[:, j]) /
+                  (np.linalg.norm(X[:, i]) * np.linalg.norm(Y[:, j]) + 1e-9))
             for i, j in wp]
     return {"tempo_di": td, "tempo_tg": tt, "tempo_pct": tempo_pct,
             "note_pct": 100.0 * float(np.mean(sims))}
