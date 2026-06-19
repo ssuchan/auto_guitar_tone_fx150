@@ -136,6 +136,40 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     return (dist, parts) if return_parts else dist
 
 
+def riff_match(di, target):
+    """DI 녹음과 타겟의 리프 일치도 추정. DI를 타겟에 맞춰(같은 템포/타이밍) 녹음하면
+    학습이 잘 됨(내용 매칭이 핵심, 실측). 반환 dict:
+      tempo_di/tempo_tg(BPM), tempo_pct(템포 일치% — 신뢰 가능),
+      note_pct(chroma DTW 음정 유사% — ※부정확. 기타 리프는 서로 비슷해 같은리프/다른
+               리프 변별이 약함(실측 89 vs 84). 게이트 금지, 귀로 확인 보조용)."""
+    import librosa
+
+    def _ld(p):
+        if isinstance(p, str):
+            y, _ = librosa.load(p, sr=SR, mono=True)
+        else:
+            y = np.asarray(p, dtype=np.float32)
+        return y / (np.sqrt(np.mean(y ** 2)) + 1e-9)
+
+    def _tempo(y):
+        oe = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP)
+        return float(np.atleast_1d(
+            librosa.feature.tempo(onset_envelope=oe, sr=SR, hop_length=HOP))[0])
+
+    yd, yt = _ld(di), _ld(target)
+    td, tt = _tempo(yd), _tempo(yt)
+    tempo_pct = 100.0 * (1 - min(abs(td - tt) / max(td, tt, 1.0), 1.0))
+    Cd = librosa.feature.chroma_cqt(y=yd, sr=SR, hop_length=HOP)
+    Ct = librosa.feature.chroma_cqt(y=yt, sr=SR, hop_length=HOP)
+    sub = Cd.shape[1] < Ct.shape[1] * 0.8
+    _, wp = librosa.sequence.dtw(X=Cd, Y=Ct, subseq=sub, metric="cosine")
+    sims = [float(np.dot(Cd[:, i], Ct[:, j]) /
+                  (np.linalg.norm(Cd[:, i]) * np.linalg.norm(Ct[:, j]) + 1e-9))
+            for i, j in wp]
+    return {"tempo_di": td, "tempo_tg": tt, "tempo_pct": tempo_pct,
+            "note_pct": 100.0 * float(np.mean(sims))}
+
+
 if __name__ == "__main__":
     rng = np.random.default_rng(0)
     dur = 2.0

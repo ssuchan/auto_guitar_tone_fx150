@@ -64,7 +64,32 @@ def restore_preset(slot):
         print(f"(복구 실패 — 페달에서 프리셋 다시 누르면 복구됨: {e})")
 
 
-def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None):
+def _start_playalong(path):
+    """녹음과 동시에 타겟을 기본 출력으로 재생(따라치기). 별도 OutputStream을 스레드로
+    돌려 sd.rec(입력)과 충돌 안 함. DI는 기타 직결이라 스피커 소리가 안 섞임. 핸들 반환."""
+    try:
+        import threading
+        data, psr = sf.read(path, dtype="float32")
+        chans = data.shape[1] if data.ndim > 1 else 1
+        os_ = sd.OutputStream(samplerate=psr, channels=chans)
+        os_.start()
+        threading.Thread(target=lambda: _safe_write(os_, data), daemon=True).start()
+        print(f"♪ 타겟 같이 재생(따라치기): {path}")
+        return os_
+    except Exception as e:
+        print(f"(play-along 생략: {e})")
+        return None
+
+
+def _safe_write(stream, data):
+    try:
+        stream.write(data)
+    except Exception:
+        pass
+
+
+def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None,
+           play_along=None):
     if bypass:
         bypass_fx()
     fx = find_fx150()
@@ -79,8 +104,14 @@ def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None):
         print(f"  {n}..."); time.sleep(1.0)
     print("● recording")
 
+    play_stream = _start_playalong(play_along) if play_along else None
     rec = sd.rec(int(sr * seconds), samplerate=sr, channels=ch, dtype="float32", device=idx)
     sd.wait()
+    if play_stream is not None:
+        try:
+            play_stream.stop(); play_stream.close()
+        except Exception:
+            pass
     rec = np.asarray(rec)
     mono = rec.mean(axis=1) if rec.ndim > 1 else rec
     # 녹음 시작 pop/click 제거(첫 200ms). sd.rec 스트림 시작 트랜지언트가 파일 맨 앞에
@@ -120,8 +151,11 @@ def main():
     ap.add_argument("--no-bypass", action="store_true", help="bypass(드라이) 자동전환 끄기")
     ap.add_argument("--restore-slot", default=None,
                     help="녹음 후 이 슬롯(숫자/38A) 재로드로 bypass 복구")
+    ap.add_argument("--play-along", default=None,
+                    help="녹음과 동시에 이 wav(타겟)를 재생 → 따라치면 템포/타이밍 자동 정렬")
     a = ap.parse_args()
-    record(a.out, a.secs, bypass=not a.no_bypass, restore_slot=a.restore_slot)
+    record(a.out, a.secs, bypass=not a.no_bypass, restore_slot=a.restore_slot,
+           play_along=a.play_along)
 
 
 if __name__ == "__main__":

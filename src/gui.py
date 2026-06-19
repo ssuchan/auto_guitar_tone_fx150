@@ -163,10 +163,16 @@ class App:
         ttk.Label(frm, text="DI 녹음 길이(초)").grid(row=8, column=0, sticky="e", padx=4, pady=3)
         self.v["di_sec"] = tk.StringVar(value="15")
         ttk.Entry(frm, textvariable=self.v["di_sec"], width=8).grid(row=8, column=1, sticky="w", padx=4)
-        self.rec_btn = ttk.Button(frm, text="DI 녹음", command=self._record)
-        self.rec_btn.grid(row=8, column=2, sticky="w", padx=4)
-        self.play_btn = ttk.Button(frm, text="DI 듣기", command=self._play_di)
-        self.play_btn.grid(row=8, column=3, sticky="w", padx=4)
+        btns = ttk.Frame(frm)
+        btns.grid(row=8, column=2, columnspan=2, sticky="w", padx=4)
+        self.rec_btn = ttk.Button(btns, text="DI 녹음", command=self._record, width=7)
+        self.rec_btn.grid(row=0, column=0, padx=(0, 3))
+        self.play_btn = ttk.Button(btns, text="DI 듣기", command=self._play_di, width=7)
+        self.play_btn.grid(row=0, column=1, padx=(0, 3))
+        ttk.Button(btns, text="타겟 듣기", command=self._play_target, width=8).grid(row=0, column=2, padx=(0, 3))
+        ttk.Button(btns, text="리프 체크", command=self._riff_check, width=8).grid(row=0, column=3, padx=(0, 6))
+        self.playalong = tk.BooleanVar(value=True)
+        ttk.Checkbutton(btns, text="타겟 들으며", variable=self.playalong).grid(row=0, column=4)
 
         # 게인 레벨 체크박스(복수 선택). 선택한 캐릭터의 AMP 모델만 탐색(전부 해제=전체).
         ttk.Label(frm, text="게인 레벨\n(곡 성격, 복수)").grid(row=9, column=0, sticky="e", padx=4, pady=3)
@@ -249,30 +255,69 @@ class App:
         slotfield = self.v["slot"].get().strip()
         if slotfield:                       # 슬롯 채웠으면 녹음 후 그 프리셋 재로드(bypass 복구)
             cmd += ["--restore-slot", slotfield]
+        tgt = os.path.join(songdir, "target.wav")   # 타겟 들으며 녹음(따라치기 → 정렬)
+        if self.playalong.get() and os.path.exists(tgt):
+            cmd += ["--play-along", tgt]
         self.rec_btn.config(text="녹음 중...")
         self._run_cmds([("DI 녹음", cmd)])
 
-    def _play_di(self):
+    def _song_file(self, fname):
+        """현재 곡 폴더의 파일 경로 + 사전 체크. (busy/곡없음/파일없음이면 None)."""
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("재생 불가", "녹음/학습 중에는 재생할 수 없어요.")
-            return
+            messagebox.showinfo("불가", "녹음/학습 중에는 할 수 없어요.")
+            return None
         song = self.v["song"].get().strip()
         if not song:
             messagebox.showerror("입력 오류", "곡 제목을 입력하세요.")
-            return
-        path = os.path.join(ROOT, "work", "songs", song, "di.wav")
-        if not os.path.exists(path):
-            messagebox.showerror("파일 없음", f"녹음된 DI가 없어요:\n{path}")
+            return None
+        return os.path.join(ROOT, "work", "songs", song, fname)
+
+    def _play_wav(self, path, label):
+        if not path or not os.path.exists(path):
+            messagebox.showerror("파일 없음", f"{label} 파일이 없어요:\n{path}")
             return
         try:
             import soundfile as sf
             import sounddevice as sd
             data, sr = sf.read(path, dtype="float32")
             sd.stop()
-            sd.play(data, sr)              # 기본 출력으로 재생(비차단). 다시 누르면 재시작.
-            self._append(f"[DI 재생] {os.path.basename(path)} ({len(data)/sr:.1f}s)\n")
+            sd.play(data, sr)              # 기본 출력 재생(비차단). 다시 누르면 재시작.
+            self._append(f"[{label} 재생] {os.path.basename(path)} ({len(data)/sr:.1f}s)\n")
         except Exception as e:
             messagebox.showerror("재생 오류", str(e))
+
+    def _play_di(self):
+        self._play_wav(self._song_file("di.wav"), "DI")
+
+    def _play_target(self):
+        self._play_wav(self._song_file("target.wav"), "타겟")
+
+    def _riff_check(self):
+        """DI와 타겟의 템포/노트 일치도 표시(참고용). 게이트 아님 — 귀로 판단 보조."""
+        d = self._song_file("di.wav")
+        if d is None:
+            return
+        di = d
+        tg = self._song_file("target.wav")
+        if not (os.path.exists(di) and os.path.exists(tg)):
+            messagebox.showerror("파일 없음", "di.wav와 target.wav가 둘 다 있어야 해요.")
+            return
+        self._append("[리프 체크] 계산 중...(수초)\n")
+
+        def work():
+            try:
+                from tone_loss import riff_match
+                r = riff_match(di, tg)
+                self.q.put(("log",
+                    "[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM) | "
+                    "노트 %.0f%% (참고·부정확)\n"
+                    "  ※ 템포는 신뢰 가능, 노트%%는 기타 리프 특성상 부정확. "
+                    "최종은 '타겟 듣기'로 귀로 확인하세요.\n"
+                    % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"], r["note_pct"])))
+            except Exception as e:
+                self.q.put(("log", f"[리프 체크] 실패: {e}\n"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _stop(self):
         self._stopping = True
