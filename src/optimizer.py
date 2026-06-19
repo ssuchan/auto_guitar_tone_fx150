@@ -11,11 +11,14 @@ chains_config 모드:
   ("frozen", model, params) — 모델+파라미터 완전 고정 (탐색 안 함, Stage 2 선행결과 유지용)
 """
 import time as _time
+import warnings
 import optuna
 from fx150_spec import load_spec, para_steps
 
 SPEC = load_spec()
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+# multivariate/group TPE는 Optuna에서 experimental → 경고만 끔(기능은 안정적으로 동작).
+warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
 
 # 큰 값(Hz/ms) 파라미터는 BE 인코더(apply_preset)로 정확히 적용됨(실측 확인) — 더 이상
 # 고정 불필요. 단, 장비가 HID 쓰기를 무시하는 모델은 제외(대체 모델 있음).
@@ -321,20 +324,47 @@ def _build_enqueue(fine_config, best_a):
     return enqueue
 
 
+def _make_sampler(kind, seed):
+    """Stage B sampler. 기본=multivariate TPE(파라미터 상호작용까지 모델링 → 독립
+    TPE보다 보통 샘플효율 좋음). 실험용으로 cmaes/gp 선택 가능(연속 노브 튜닝).
+    enqueue(warm start)는 study.enqueue_trial이라 sampler 무관하게 동작."""
+    kind = (kind or "tpe").lower()
+    if kind == "cmaes":
+        return optuna.samplers.CmaEsSampler(seed=seed)
+    if kind == "gp":
+        try:
+            return optuna.samplers.GPSampler(seed=seed)
+        except Exception as e:
+            print(f"  (GPSampler 불가: {e} → multivariate TPE로 폴백)")
+    return optuna.samplers.TPESampler(seed=seed, n_startup_trials=3,
+                                      multivariate=True, group=True)
+
+
+def _set_fidelity(evaluator, sec):
+    """멀티-피델리티: evaluator가 지원하면 DI 길이 전환(없으면 무시 — mock 등)."""
+    fn = getattr(evaluator, "set_fidelity", None)
+    if fn:
+        fn(sec)
+
+
 def optimize(evaluator, chains_config, n_trials=100, seed=0, progress=False,
              time_limit_sec=None):
     """단일 스터디 최적화. best (study, candidate) 반환."""
-    sampler = optuna.samplers.TPESampler(seed=seed)
+    sampler = optuna.samplers.TPESampler(seed=seed, multivariate=True, group=True)
     return _run_study(evaluator, chains_config, n_trials, sampler,
                       progress=progress, time_limit_sec=time_limit_sec)
 
 
 def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
-                    progress=False, time_limit_sec=None):
-    """2단계 최적화: 거친 모델탐색(Random) → 모델 고정 파라미터 미세조정(TPE).
+                    progress=False, time_limit_sec=None, stage_a_sec=None,
+                    stage_b_sampler="tpe"):
+    """2단계 최적화: 거친 모델탐색(Random) → 모델 고정 파라미터 미세조정(sampler).
 
     Stage A: RandomSampler — 방대한 모델 공간 다양하게 탐색.
-    Stage B: TPESampler(n_startup_trials=3) — 모델 고정 후 파라미터 수렴.
+    Stage B: multivariate TPE(기본)/CMA-ES/GP — 모델 고정 후 파라미터 수렴.
+    stage_a_sec: Stage A를 짧은 DI로(멀티-피델리티, 모델 순위만 보면 됨 → 벽시계↓).
+                 None이면 풀 DI. 설정 시 Stage B는 풀 DI로 warm-start 재평가하므로
+                 Stage B 결과를 반환(두 스테이지 loss가 서로 다른 피델리티라 비교X).
     두 스테이지 중 더 나은 (study, candidate) 반환.
     """
     if time_limit_sec is not None:
@@ -343,9 +373,11 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
     else:
         time_a = time_b = None
 
+    _set_fidelity(evaluator, stage_a_sec)               # Stage A: 짧은 DI(설정 시)
     sampler_a = optuna.samplers.RandomSampler(seed=seed)
     if progress:
-        print(f"[Stage A] random model search  {n_coarse} trials")
+        tag = f" (DI {stage_a_sec:.1f}s)" if stage_a_sec else ""
+        print(f"[Stage A] random model search  {n_coarse} trials{tag}")
     study_a, best_a = _run_study(evaluator, chains_config, n_coarse, sampler_a,
                                   progress=progress, label="A ",
                                   time_limit_sec=time_a)
@@ -353,19 +385,51 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
     fine_config = _build_fine_config(chains_config, best_a)
 
     if not _has_free_params(fine_config):
+        _set_fidelity(evaluator, None)
         return study_a, best_a
 
     enqueue = _build_enqueue(fine_config, best_a)
 
-    sampler_b = optuna.samplers.TPESampler(seed=seed, n_startup_trials=3)
+    _set_fidelity(evaluator, None)                      # Stage B: 풀 DI
+    if stage_a_sec and hasattr(evaluator, "reset_best"):
+        evaluator.reset_best()      # Stage A(짧은DI) best_rec 폐기 → 풀DI로 새로 추적
+    sampler_b = _make_sampler(stage_b_sampler, seed)
     if progress:
-        print(f"[Stage B] TPE param fine-tune  {n_fine} trials (model fixed)")
+        print(f"[Stage B] {stage_b_sampler} param fine-tune  {n_fine} trials (model fixed)")
     study_b, best_b = _run_study(evaluator, fine_config, n_fine, sampler_b,
                                   enqueue=enqueue, progress=progress, label="B ",
                                   time_limit_sec=time_b)
-    if study_b.best_value <= study_a.best_value:
+    # 멀티-피델리티면 A loss는 짧은DI라 B와 비교 불가 → B 반환(B가 A best를 풀DI로
+    # warm-start 재평가하므로 B가 정당). 동일 피델리티면 노이즈 대비 더 나은 쪽.
+    if stage_a_sec or study_b.best_value <= study_a.best_value:
         return study_b, best_b
     return study_a, best_a
+
+
+def robust_refine(evaluator, study, top_k=3, repeats=2, progress=False):
+    """노이즈 방어: 상위 top_k 후보를 각 repeats번 재평가해 평균이 가장 좋은 후보 선택.
+    단발 운빨 best(캡처 변동)를 거른다. evaluator는 풀 피델리티 가정. 중복 후보는 스킵.
+    반환: (best_candidate, best_mean_loss). 후보 없으면 (None, inf)."""
+    done = [t for t in study.trials
+            if t.value is not None and "candidate" in t.user_attrs]
+    done.sort(key=lambda t: t.value)
+    cands, seen = [], set()
+    for t in done:
+        key = repr(t.user_attrs["candidate"])
+        if key not in seen:
+            seen.add(key); cands.append(t.user_attrs["candidate"])
+        if len(cands) >= top_k:
+            break
+    best_cand, best_mean = None, float("inf")
+    for i, cand in enumerate(cands):
+        vals = [evaluator(cand) for _ in range(repeats)]
+        mean = sum(vals) / len(vals)
+        if progress:
+            print(f"  robust re-eval {i + 1}/{len(cands)}: mean={mean:.4f} "
+                  f"runs={[round(v, 3) for v in vals]}", flush=True)
+        if mean < best_mean:
+            best_mean, best_cand = mean, cand
+    return best_cand, best_mean
 
 
 def print_importance(study, top_n=10):

@@ -18,7 +18,8 @@ import shutil
 import datetime
 import argparse
 import optimizer
-from optimizer import staged_optimize, print_importance, GAIN_LEVELS, amp_models_for_levels
+from optimizer import (staged_optimize, print_importance, GAIN_LEVELS,
+                       amp_models_for_levels, robust_refine)
 from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
                           load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
@@ -182,6 +183,16 @@ def main():
                     help="Send interval (s) when only params change. Speeds up Stage B (default 0.1)")
     ap.add_argument("--trim-di", type=float, default=4.0,
                     help="Length (s) of max-RMS DI segment. 0=use all (default 4.0)")
+    ap.add_argument("--stage-a-sec", type=float, default=2.0,
+                    help="멀티-피델리티: Stage A(모델탐색)를 이 짧은 DI 길이로 → 벽시계↓. "
+                         "0=풀 DI(--trim-di와 동일) (default 2.0)")
+    ap.add_argument("--stage-b-sampler", default="tpe", choices=["tpe", "cmaes", "gp"],
+                    help="Stage B 파라미터 튜닝 알고리즘. tpe=multivariate TPE(기본), "
+                         "cmaes/gp=연속튜닝 실험용 (default tpe)")
+    ap.add_argument("--robust-topk", type=int, default=3,
+                    help="학습 후 상위 K 후보를 재평가해 노이즈 거르고 최종 선택. 0=끔 (default 3)")
+    ap.add_argument("--robust-repeats", type=int, default=2,
+                    help="--robust-topk 각 후보 재평가 횟수 (default 2)")
     ap.add_argument("--time-limit", type=float, default=None,
                     help="Stage 1 max run time (min). Default=none")
     ap.add_argument("--mock", action="store_true",
@@ -276,11 +287,14 @@ def main():
         print(f"\n{'─'*50}")
         print(f"[Stage 1] OD/AMP/CAB/EQ optimization  {args.trials} trials")
         print(f"{'─'*50}")
+        stage_a_sec = args.stage_a_sec if args.stage_a_sec and args.stage_a_sec > 0 else None
         study1, best1 = staged_optimize(ev, DEFAULT_CHAINS,
                                         n_coarse=n_coarse,
                                         n_fine=args.trials - n_coarse,
                                         progress=True,
-                                        time_limit_sec=time_limit_sec)
+                                        time_limit_sec=time_limit_sec,
+                                        stage_a_sec=stage_a_sec,
+                                        stage_b_sampler=args.stage_b_sampler)
         print(f"\n=== Stage 1 best loss = {study1.best_value:.4f} ===")
         print(describe(best1))
         print_importance(study1)
@@ -297,6 +311,7 @@ def main():
         # ── Stage 2: MOD / DELAY / REVERB ─────────────────────────────────
         final_best = best1
         final_loss = study1.best_value
+        final_study = study1
 
         run_stage2 = args.stage2_trials > 0 and not args.mock
         if run_stage2:
@@ -306,10 +321,12 @@ def main():
             print(f"\n{'─'*50}")
             print(f"[Stage 2] MOD/DELAY/REVERB optimization  {args.stage2_trials} trials")
             print(f"{'─'*50}")
+            # Stage 2는 풀 DI(시간계 이펙트 DELAY/REVERB 꼬리가 짧은 DI에 안 담김).
             study2, best2 = staged_optimize(ev, cfg2,
                                             n_coarse=n_coarse2,
                                             n_fine=args.stage2_trials - n_coarse2,
-                                            progress=True)
+                                            progress=True,
+                                            stage_b_sampler=args.stage_b_sampler)
             print(f"\n=== Stage 2 best loss = {study2.best_value:.4f} ===")
             print(describe(best2))
             print_importance(study2)
@@ -326,8 +343,19 @@ def main():
                 print(f"\nImproved: {study1.best_value:.4f} → {study2.best_value:.4f} ✓")
                 final_best = best2
                 final_loss = study2.best_value
+                final_study = study2
             else:
                 print(f"\nStage 2 no improvement — keeping Stage 1 result")
+
+        # ── 노이즈 방어: 상위 후보 재평가로 최종 선택(단발 운빨 best 거름) ──────
+        if not args.mock and ev.h is not None and args.robust_topk > 0:
+            print(f"\n[Robust] 상위 {args.robust_topk} 후보 각 {args.robust_repeats}회 "
+                  "재평가 → 평균 best 선택", flush=True)
+            rb_cand, rb_mean = robust_refine(ev, final_study, top_k=args.robust_topk,
+                                             repeats=args.robust_repeats, progress=True)
+            if rb_cand is not None:
+                print(f"[Robust] final loss {final_loss:.4f} → {rb_mean:.4f} (평균)")
+                final_best, final_loss = rb_cand, rb_mean
 
         # ── 최종 결과 저장 및 장비 적용 ────────────────────────────────────
         print(f"\n{'═'*50}")

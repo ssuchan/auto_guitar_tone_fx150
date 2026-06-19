@@ -144,6 +144,20 @@ class ReampEvaluator:
         self.best_loss = float("inf")
         self.best_rec = None
         self._silent_streak = 0     # 연속 무음 trial 수 — wedge 조기 중단용
+        self._di_full = self.di     # 멀티-피델리티: 풀 DI 보관(set_fidelity로 전환)
+
+    def set_fidelity(self, sec):
+        """재생 DI 길이 전환(멀티-피델리티). Stage A는 짧게(모델 순위만 보면 됨 →
+        벽시계↓), Stage B는 풀. sec=None/0이면 풀 DI. 피처는 통계량이라 짧아도 유효."""
+        if sec and sec > 0 and len(self._di_full) > int(sec * self.cap_sr):
+            self.di = self._di_full[:int(sec * self.cap_sr)]
+        else:
+            self.di = self._di_full
+
+    def reset_best(self):
+        """best 추적 초기화(피델리티 전환 시 짧은DI best_rec 폐기용)."""
+        self.best_loss = float("inf")
+        self.best_rec = None
 
     def reamp(self):
         """DI 재생 + FX150 캡처 동시. 독립 Stream으로 서로 정지 안 시킴."""
