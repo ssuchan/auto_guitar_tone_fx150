@@ -208,7 +208,11 @@ def main():
         amp_idx = amp_models_for_levels(levels)
         optimizer.CHAIN_INCLUDE_MODELS["AMP"] = amp_idx
         total = len(optimizer.SPEC["AMP"]["models"])
-        print(f"AMP search restricted by gain-level {levels}: {len(amp_idx)}/{total} models")
+        od_idx = optimizer.od_models_for_levels(levels)
+        if od_idx:                              # OD도 같이 제한(clean이면 부스트류만)
+            optimizer.CHAIN_INCLUDE_MODELS["OD"] = od_idx
+        print(f"gain-level {levels}: AMP {len(amp_idx)}/{total}, OD {len(od_idx)}/"
+              f"{len(optimizer.SPEC['OD']['models'])} models")
 
     # --song: 곡별 작업 폴더. target/di 기본 경로를 그 폴더로, 결과도 그쪽에 저장.
     base = os.path.join(WORK, "songs", args.song) if args.song else WORK

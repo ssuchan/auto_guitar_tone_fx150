@@ -60,6 +60,31 @@ def amp_models_for_levels(levels):
             if _amp_tier(m["name"]) in want]
 
 
+# OD 모델 게인 티어(키워드). clean 골랐는데 OD가 디스토션을 걸면 안 되니 OD도 같이 제한.
+_OD_TIER_KW = [
+    ("clean",      ("CLEAN BOOST", "SMOOTH BOOST", "BEEBEE PREAMP")),
+    ("crunch",     ("SCREAMER", "TUBE OD", "GOLD BOX", "VX SILVERY", "JIMMY DRIVE")),
+    ("overdrive",  ("DARK RAT", "RIOTER", "RED 500", "DIRECT OD", "BEEBEE PLUS")),
+    ("distortion", ("ML ZONE", "FULL DS", "UK SHREDDER", "OBSESSIVE")),
+    ("metal",      ("ML MASTER", "TIGHT", "ROUND FUZZ", "SILVERY FUZZ")),
+]
+
+
+def _od_tier(name):
+    u = name.upper()
+    for tier, kws in _OD_TIER_KW:
+        if any(k in u for k in kws):
+            return tier
+    return "overdrive"
+
+
+def od_models_for_levels(levels):
+    """선택 게인레벨에 해당하는 OD 모델. clean이면 부스트류만 → OD가 디스토션 못 걸게."""
+    want = set(levels)
+    return [i for i, m in enumerate(SPEC["OD"]["models"], 1)
+            if _od_tier(m["name"]) in want]
+
+
 def estimate_gain_levels(target):
     """target.wav 왜곡도(crest factor)로 게인레벨을 추정 → 넓은 3티어 윈도우(근사).
 
