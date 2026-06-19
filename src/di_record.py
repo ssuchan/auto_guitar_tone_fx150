@@ -93,9 +93,9 @@ def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None):
     else:
         if peak >= 0.99:
             print("WARN: 입력단 클리핑(peak≈1). FX150 입력/녹음 볼륨 낮추고 재녹음 권장.")
-        # 99.5퍼센타일 기준 정규화(튀는 트랜지언트 1방에 안 휘둘림) → 실제 연주 레벨을 올림, 그 위는 클립.
+        # 99.5퍼센타일 기준 정규화. 0.5 타겟(너무 뜨거우면 FX150 입력단 오버드라이브 → 클린도 찌그러짐).
         ref = float(np.percentile(np.abs(mono), 99.5)) or peak
-        mono = np.clip(mono * (0.7 / ref), -0.99, 0.99)
+        mono = np.clip(mono * (0.5 / ref), -0.9, 0.9)
         active = float(np.mean(np.abs(mono) > 0.1))
         sf.write(out_wav, mono, sr)
         print(f"saved -> {out_wav}  정규화(99.5%→0.7) 연주활성={active*100:.0f}% (원본 peak={peak:.3f} rms={rms:.5f})")

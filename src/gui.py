@@ -266,11 +266,15 @@ class App:
         self._stopping = True
         p = self.proc
         if p and p.poll() is None:
-            self._append("\n[중지] 프로세스 종료 중...\n")
-            try:
-                p.terminate()
+            self._append("\n[중지] 종료 중...\n")
+            try:   # /T: 자식까지, /F: 강제 — terminate()보다 확실히 죽임
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                               creationflags=CREATE_NO_WINDOW)
             except Exception:
-                pass
+                try:
+                    p.kill()
+                except Exception:
+                    pass
 
     def _run_cmds(self, cmds):
         self._save_state()                  # 시작 시점 상태 저장(이어서 학습 가능)
