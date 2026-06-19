@@ -30,6 +30,9 @@ VID, PID = 0x34DB, 0x8004
 SILENCE_PEAK_FLOOR = 0.005   # 이 peak 미만 → 신호 없음(무음/wedge)으로 간주
 SILENCE_PENALTY = 100.0
 SILENT_WEDGE_STREAK = 3     # 연속 이 횟수만큼 무음이면 장치 wedge로 보고 중단
+# 클리핑 경고는 peak가 아니라 지속도(clip%)로. 단발 피크(clip%≈0.01%)는 rms정규화
+# 손실에 무해 → 헛경고 안 냄. 지속 railing(과부스트)만 이 비율 초과 시 경고.
+CLIP_FRAC_WARN = 0.01       # 캡처 샘플의 1% 이상이 ≥0.98 → 지속 클리핑으로 경고
 # 회복 폴링 임계: 재생 없이 캡처만 했을 때 wedge=idle(~6e-5) vs 살아있는 ADC
 # 노이즈플로어(~1.3e-3, 실측)를 가르는 값. 8x/2.5x 마진으로 견고.
 WEDGE_RECOVER_FLOOR = 0.0005
@@ -285,10 +288,13 @@ class ReampEvaluator:
                 return SILENCE_PENALTY
         self._silent_streak = 0     # 신호 정상 → 연속 카운터 리셋
 
-        # 클리핑 경고
-        if peak >= 0.99:
-            print(f"  [WARN] capture clipping (peak={peak:.3f}): "
-                  "lower --play-gain or reduce PC output volume", flush=True)
+        # 클리핑 경고: peak가 아니라 지속도(clip%)로. 단발 피크는 무해(rms정규화),
+        # 지속 railing(EQ 등 과부스트)만 손실 오염 → 경고. (EQ는 net-zero로 대부분 예방.)
+        rec_mono = rec.mean(axis=1) if rec.ndim > 1 else rec
+        clip_frac = float(np.mean(np.abs(rec_mono) > 0.98))
+        if clip_frac > CLIP_FRAC_WARN:
+            print(f"  [WARN] sustained clipping ({clip_frac*100:.1f}% samples ≥0.98) — "
+                  "출력 과다(EQ/메이크업 점검)", flush=True)
 
         loss = tone_distance(self.target_feat, rec, sr_b=sr)
         if loss < self.best_loss:

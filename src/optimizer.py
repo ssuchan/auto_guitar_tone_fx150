@@ -164,12 +164,31 @@ def _suggest_model(trial, chain):
     return trial.suggest_categorical(f"{chain}.model", allowed)
 
 
+def _normalize_eq_netzero(out, names, pins):
+    """EQ 밴드 게인을 net-zero(평균=0dB=neutral)로 시프트. 밴드를 전체적으로 올리는
+    것은 그냥 makeup 게인인데, tone_loss가 rms정규화라 매칭엔 무의미하고 출력만
+    railing시켜 클리핑을 유발한다(실측: 전밴드 +12dB → rms 8배·peak 1.0, 어떤 레벨
+    트림으로도 못 풂 — CAB LEVEL은 EQ 앞, EQ LEVEL은 HID 감쇠 안 됨). 평균을 빼
+    전체 부스트만 제거하고 톤 셰이프(밴드 상대차)는 보존. dB밴드(LEVEL 등 핀 제외)만 대상."""
+    idx = [i for i, (nm, st) in enumerate(names) if nm not in pins]
+    if not idx:
+        return
+    neutral = names[idx[0]][1] // 2          # 대칭 dB 밴드의 0dB 지점 = steps//2
+    shift = round(sum(out[i] for i in idx) / len(idx)) - neutral
+    if shift == 0:
+        return
+    for i in idx:
+        out[i] = max(0, min(names[i][1], out[i] - shift))
+
+
 def _suggest_params(trial, chain, model):
-    """모델 파라미터 제안. PARAM_PIN=고정값(탐색X), CHAIN_PARAM_CAP=탐색범위 비율제한."""
+    """모델 파라미터 제안. PARAM_PIN=고정값(탐색X), CHAIN_PARAM_CAP=탐색범위 비율제한.
+    EQ는 net-zero 정규화(전체 부스트 제거 → 클리핑 방지, 톤 셰이프 보존)."""
     pins = PARAM_PIN.get(chain, {})
     caps = CHAIN_PARAM_CAP.get(chain, {})
-    out = []
+    names, out = [], []
     for nm, steps in _model_params(chain, model):
+        names.append((nm, steps))
         if nm in pins:
             out.append(pins[nm])
         elif nm in caps:
@@ -178,6 +197,8 @@ def _suggest_params(trial, chain, model):
             out.append(trial.suggest_int(f"{chain}.{nm}", lo, hi))
         else:
             out.append(trial.suggest_int(f"{chain}.{nm}", 0, steps))
+    if chain == "EQ":
+        _normalize_eq_netzero(out, names, pins)
     return out
 
 
