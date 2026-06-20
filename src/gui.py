@@ -177,6 +177,18 @@ class App:
                 return rhs.split("|")[0].strip()[:22]
         return "-"
 
+    def _apply_song_url_time(self, song):
+        """곡 settings.json에서 유튜브 링크/구간(start/end)만 폼에 복원(있으면)."""
+        sp = os.path.join(ROOT, "work", "songs", song, "settings.json")
+        try:
+            with open(sp, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        for k in ("url", "start", "end"):
+            if isinstance(data.get(k), str):
+                self.v[k].set(data[k])
+
     def _list_song_presets(self, song):
         """그 곡의 학습 프리셋(results/<ts>/result.txt) 목록, loss 오름차순."""
         import glob
@@ -231,6 +243,7 @@ class App:
             sel = song_lb.curselection()
             if not sel:
                 return
+            self._apply_song_url_time(songs[sel[0]])   # 유튜브 링크/구간을 폼에 반영
             state["presets"] = self._list_song_presets(songs[sel[0]])
             preset_lb.delete(0, "end")
             for it in state["presets"]:
