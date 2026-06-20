@@ -50,7 +50,7 @@ GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 
 
 def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
-                   gain_levels=None, calibrate=False):
+                   gain_levels=None, calibrate=False, resume=False):
     """(라벨, argv) 리스트 생성. url 있으면 fetch 먼저, 그 다음 학습."""
     cmds = []
     if url:
@@ -66,6 +66,8 @@ def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
              "--trials", str(s1), "--stage2-trials", str(s2), "--play-gain", str(gain)]
     # main.py가 calibrate 기본 ON이므로, 체크박스 해제를 반영하려면 명시적으로 전달.
     train += ["--calibrate"] if calibrate else ["--no-calibrate"]
+    if resume:                          # 이전 best에서 이어서 개선
+        train += ["--resume"]
     if name:
         train += ["--save-name", name]
     if slot:
@@ -89,12 +91,14 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self._on_close)     # 닫을 때 저장
         self.root.after(100, self._drain)
 
-    def _load_state(self):
-        try:
-            with open(STATE_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return
+    def _form_data(self):
+        data = {k: var.get() for k, var in self.v.items()}
+        data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
+        data["auto_gl"] = self.auto_gl.get()
+        data["calibrate"] = self.calibrate.get()
+        return data
+
+    def _apply_data(self, data):
         for k, var in self.v.items():
             if isinstance(data.get(k), str):
                 var.set(data[k])
@@ -103,17 +107,44 @@ class App:
         self.auto_gl.set(bool(data.get("auto_gl", False)))
         self.calibrate.set(bool(data.get("calibrate", False)))
 
-    def _save_state(self):
-        data = {k: var.get() for k, var in self.v.items()}
-        data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
-        data["auto_gl"] = self.auto_gl.get()
-        data["calibrate"] = self.calibrate.get()
+    def _song_settings_path(self):
+        song = self.v["song"].get().strip()
+        return (os.path.join(ROOT, "work", "songs", song, "settings.json")
+                if song else None)
+
+    def _load_state(self):
         try:
-            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-            with open(STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except OSError:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                self._apply_data(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError):
             pass
+
+    def _save_state(self):
+        data = self._form_data()
+        paths = [STATE_FILE]                        # 전역(마지막 사용) + 곡별
+        sp = self._song_settings_path()
+        if sp:
+            paths.append(sp)
+        for p in paths:
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+
+    def _load_song_settings(self):
+        sp = self._song_settings_path()
+        if not sp:
+            messagebox.showerror("입력 오류", "곡 제목을 먼저 입력하세요.")
+            return
+        try:
+            with open(sp, encoding="utf-8") as f:
+                self._apply_data(json.load(f))
+            self._append(f"[설정 불러옴] {self.v['song'].get()}\n")
+        except (FileNotFoundError, json.JSONDecodeError):
+            messagebox.showinfo("없음", "이 곡의 저장된 설정이 없어요.\n"
+                                "(학습/녹음 또는 GUI 종료 시 자동 저장됩니다)")
 
     def _on_close(self):
         self._save_state()
@@ -144,7 +175,12 @@ class App:
         ttk.Label(frm, text="~").grid(row=1, column=2)
         ttk.Entry(frm, textvariable=self.v["end"], width=8).grid(row=1, column=3, sticky="w")
 
-        field(2, "곡 제목 (폴더명)", "song")
+        ttk.Label(frm, text="곡 제목 (폴더명)").grid(row=2, column=0, sticky="e", padx=4, pady=3)
+        self.v["song"] = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.v["song"], width=30).grid(
+            row=2, column=1, columnspan=2, sticky="we", padx=4)
+        ttk.Button(frm, text="설정 불러오기", command=self._load_song_settings).grid(
+            row=2, column=3, sticky="we", padx=4)
         field(3, "Stage1 횟수", "s1", "100", 10)
         field(4, "Stage2 횟수", "s2", "50", 10)
         # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
@@ -187,8 +223,11 @@ class App:
         ttk.Checkbutton(gl, text="auto(타겟분석)", variable=self.auto_gl).grid(
             row=0, column=len(GAIN_LEVELS), padx=(12, 0))
 
+        self.resume = tk.BooleanVar(value=False)   # 이전 best에서 이어 개선(--resume)
+        ttk.Checkbutton(frm, text="이전 best\n이어 개선", variable=self.resume).grid(
+            row=10, column=0, sticky="w", padx=4)
         self.btn = ttk.Button(frm, text="학습하기", command=self._start)
-        self.btn.grid(row=10, column=0, columnspan=3, pady=8, sticky="we")
+        self.btn.grid(row=10, column=1, columnspan=2, pady=8, sticky="we")
         self.stop_btn = ttk.Button(frm, text="중지", command=self._stop, state="disabled")
         self.stop_btn.grid(row=10, column=3, pady=8, sticky="we")
 
@@ -230,7 +269,8 @@ class App:
             [lv for lv, v in self.gain_levels.items() if v.get()]
         cmds = build_commands(self.py, url=url, start=start, end=end, song=song,
                               s1=s1, s2=s2, gain=gain, name=name, slot=slot,
-                              gain_levels=levels, calibrate=self.calibrate.get())
+                              gain_levels=levels, calibrate=self.calibrate.get(),
+                              resume=self.resume.get())
         self.btn.config(text="학습 중...")
         self._run_cmds(cmds)
 

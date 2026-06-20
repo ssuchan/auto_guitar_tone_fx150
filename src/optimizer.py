@@ -406,6 +406,21 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
     return study_a, best_a
 
 
+def resume_optimize(evaluator, prev_best, n_trials, seed=0, progress=False,
+                    stage_b_sampler="tpe"):
+    """이전 학습 best에서 이어서 개선. 모델은 prev_best로 고정하고 파라미터만 미세조정
+    (prev_best 파라미터를 warm-start로 enqueue → 첫 trial이 이전 best 재현, 그 주변
+    탐색). robust pick과 함께 쓰면 결과가 이전보다 나빠지지 않음. (study, candidate) 반환."""
+    cfg = {chain: ("bypass" if m.get("enable", 1) == 0 else ("fix", m["model"]))
+           for chain, m in prev_best.items()}
+    enqueue = _build_enqueue(cfg, prev_best)
+    sampler = _make_sampler(stage_b_sampler, seed)
+    if progress:
+        print(f"[Resume] 이전 best 모델 고정 + 파라미터 개선  {n_trials} trials")
+    return _run_study(evaluator, cfg, n_trials, sampler, enqueue=enqueue,
+                      progress=progress, label="R ")
+
+
 def robust_refine(evaluator, study, top_k=3, repeats=2, progress=False):
     """노이즈 방어: 상위 top_k 후보를 각 repeats번 재평가해 평균이 가장 좋은 후보 선택.
     단발 운빨 best(캡처 변동)를 거른다. evaluator는 풀 피델리티 가정. 중복 후보는 스킵.

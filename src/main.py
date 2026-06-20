@@ -18,8 +18,8 @@ import shutil
 import datetime
 import argparse
 import optimizer
-from optimizer import (staged_optimize, print_importance, GAIN_LEVELS,
-                       amp_models_for_levels, robust_refine)
+from optimizer import (staged_optimize, resume_optimize, print_importance,
+                       GAIN_LEVELS, amp_models_for_levels, robust_refine)
 from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
                           load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
@@ -195,6 +195,10 @@ def main():
                     help="학습 후 상위 K 후보를 재평가해 노이즈 거르고 최종 선택. 0=끔 (default 3)")
     ap.add_argument("--robust-repeats", type=int, default=2,
                     help="--robust-topk 각 후보 재평가 횟수 (default 2)")
+    ap.add_argument("--resume", action="store_true",
+                    help="이전 학습 best(work/songs/<곡>/best_candidate.json)에서 이어서 "
+                         "개선. 모델 고정 + 이전값 warm-start로 파라미터만 미세조정 → "
+                         "결과가 이전보다 나빠지지 않음(Stage2 생략, 전 체인 포함이라)")
     ap.add_argument("--time-limit", type=float, default=None,
                     help="Stage 1 max run time (min). Default=none")
     ap.add_argument("--mock", action="store_true",
@@ -284,38 +288,60 @@ def main():
             print("[Stage 0] Baseline init (AMP/CAB/EQ on, rest bypass)")
             ev.prev = init_baseline(ev.h, delay=args.apply_delay)
 
-        # ── Stage 1: OD / AMP / CAB / EQ ──────────────────────────────────
-        n_coarse = max(1, args.trials // 3)
-        print(f"\n{'─'*50}")
-        print(f"[Stage 1] OD/AMP/CAB/EQ optimization  {args.trials} trials")
-        print(f"{'─'*50}")
-        stage_a_sec = args.stage_a_sec if args.stage_a_sec and args.stage_a_sec > 0 else None
-        study1, best1 = staged_optimize(ev, DEFAULT_CHAINS,
-                                        n_coarse=n_coarse,
-                                        n_fine=args.trials - n_coarse,
-                                        progress=True,
-                                        time_limit_sec=time_limit_sec,
-                                        stage_a_sec=stage_a_sec,
-                                        stage_b_sampler=args.stage_b_sampler)
-        print(f"\n=== Stage 1 best loss = {study1.best_value:.4f} ===")
-        print(describe(best1))
-        print_importance(study1)
+        # ── 이전 결과 이어하기(--resume): 이전 best 모델고정 + 파라미터 개선 ────
+        prev_best = None
+        if args.resume and not args.mock:
+            try:
+                with open(os.path.join(base, "best_candidate.json"), encoding="utf-8") as f:
+                    prev_best = json.load(f).get("candidate")
+            except (FileNotFoundError, json.JSONDecodeError):
+                print("[Resume] best_candidate.json 없음 → 일반 학습으로 진행")
 
-        s1_rec = ev.best_rec  # Stage 1 최적 녹음 보존
-        results.append({
-            "label": "Stage 1 (OD/AMP/CAB/EQ)",
-            "best": best1,
-            "loss": study1.best_value,
-            "study": study1,
-            "parts": _get_parts(ev, s1_rec),
-        })
+        if prev_best:
+            print(f"\n{'─'*50}")
+            print(f"[Resume] 이전 best 모델 고정 + 파라미터 개선  {args.trials} trials")
+            print(f"{'─'*50}")
+            print(describe(prev_best))
+            study1, best1 = resume_optimize(ev, prev_best, n_trials=args.trials,
+                                            progress=True,
+                                            stage_b_sampler=args.stage_b_sampler)
+            print(f"\n=== Resume best loss = {study1.best_value:.4f} ===")
+            print(describe(best1))
+            print_importance(study1)
+            results.append({"label": "Resume (이전 best 개선)", "best": best1,
+                            "loss": study1.best_value, "study": study1,
+                            "parts": _get_parts(ev, ev.best_rec)})
+        else:
+            # ── Stage 1: OD / AMP / CAB / EQ ──────────────────────────────────
+            n_coarse = max(1, args.trials // 3)
+            print(f"\n{'─'*50}")
+            print(f"[Stage 1] OD/AMP/CAB/EQ optimization  {args.trials} trials")
+            print(f"{'─'*50}")
+            stage_a_sec = args.stage_a_sec if args.stage_a_sec and args.stage_a_sec > 0 else None
+            study1, best1 = staged_optimize(ev, DEFAULT_CHAINS,
+                                            n_coarse=n_coarse,
+                                            n_fine=args.trials - n_coarse,
+                                            progress=True,
+                                            time_limit_sec=time_limit_sec,
+                                            stage_a_sec=stage_a_sec,
+                                            stage_b_sampler=args.stage_b_sampler)
+            print(f"\n=== Stage 1 best loss = {study1.best_value:.4f} ===")
+            print(describe(best1))
+            print_importance(study1)
+            results.append({
+                "label": "Stage 1 (OD/AMP/CAB/EQ)",
+                "best": best1,
+                "loss": study1.best_value,
+                "study": study1,
+                "parts": _get_parts(ev, ev.best_rec),
+            })
 
-        # ── Stage 2: MOD / DELAY / REVERB ─────────────────────────────────
         final_best = best1
         final_loss = study1.best_value
         final_study = study1
 
-        run_stage2 = args.stage2_trials > 0 and not args.mock
+        # ── Stage 2: MOD / DELAY / REVERB (resume이면 전 체인 포함이라 생략) ───
+        run_stage2 = args.stage2_trials > 0 and not args.mock and not prev_best
         if run_stage2:
             ev.reset_tracking()   # prev 초기화 → Stage 2 첫 trial이 전 체인 정합 전송
             cfg2 = _make_stage2_config(best1)
@@ -358,6 +384,17 @@ def main():
             if rb_cand is not None:
                 print(f"[Robust] final loss {final_loss:.4f} → {rb_mean:.4f} (평균)")
                 final_best, final_loss = rb_cand, rb_mean
+
+        # 이전 결과 이어하기(--resume)용 best 후보 저장(매 run 최신으로 갱신)
+        if not args.mock and final_best is not None:
+            try:
+                with open(os.path.join(base, "best_candidate.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump({"loss": round(final_loss, 4), "candidate": final_best,
+                               "at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")},
+                              f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
 
         # ── 최종 결과 저장 및 장비 적용 ────────────────────────────────────
         print(f"\n{'═'*50}")
