@@ -13,7 +13,7 @@
 import sys
 import time
 import hid
-from fx150_protocol import build_report, build_frame, parse_frame
+from fx150_protocol import build_report, build_frame
 
 VID, PID = 0x34DB, 0x8004
 

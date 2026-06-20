@@ -373,7 +373,7 @@ def main():
                 final_loss = study2.best_value
                 final_study = study2
             else:
-                print(f"\nStage 2 no improvement — keeping Stage 1 result")
+                print("\nStage 2 no improvement — keeping Stage 1 result")
 
         # ── 노이즈 방어: 상위 후보 재평가로 최종 선택(단발 운빨 best 거름) ──────
         if not args.mock and ev.h is not None and args.robust_topk > 0:

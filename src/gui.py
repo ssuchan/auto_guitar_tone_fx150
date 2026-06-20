@@ -158,16 +158,35 @@ class App:
         self._run_cmds([("FX150 스펙 추출", cmd)])
 
     # ── 이전 프리셋 가져오기 (곡 → 학습 프리셋 선택 → 적용/이어개선) ────────
-    def _parse_result_candidate(self, result_path):
-        """result.txt에서 (loss, candidate dict) 파싱."""
+    @staticmethod
+    def _best_block(text):
+        """result.txt의 여러 '=== label (loss=X) ===' 블록 중 loss 최소 블록을
+        (loss, candidate dict, 블록텍스트)로 반환. 없으면 None.
+        (Stage1+Stage2가 한 파일에 같이 적히므로 최종 best를 정확히 고르기 위함)"""
         import ast
         import re
-        text = open(result_path, encoding="utf-8").read()
-        m = re.search(r"loss=([\d.]+)", text)
-        loss = round(float(m.group(1)), 4) if m else 0.0
-        marker = text.rfind("# raw")
-        cand = ast.literal_eval(text[marker:].split("\n", 1)[1].strip())
-        return loss, cand
+        best = None
+        for b in re.split(r"^=== ", text, flags=re.M)[1:]:
+            m = re.search(r"loss=([\d.]+)", b)
+            r = b.find("# raw")
+            if not m or r == -1:
+                continue
+            try:
+                cand = ast.literal_eval(b[r:].split("\n", 1)[1].strip())
+            except (SyntaxError, ValueError):
+                continue
+            loss = float(m.group(1))
+            if best is None or loss < best[0]:
+                best = (loss, cand, b)
+        return best
+
+    def _parse_result_candidate(self, result_path):
+        """result.txt의 최종 best 블록에서 (loss, candidate dict) 파싱."""
+        best = self._best_block(open(result_path, encoding="utf-8").read())
+        if not best:
+            raise ValueError("result.txt에서 candidate를 못 찾음")
+        loss, cand, _ = best
+        return round(loss, 4), cand
 
     @staticmethod
     def _chain_tag(text, chain):
@@ -219,21 +238,22 @@ class App:
                 self.v[k].set(data[k])
 
     def _list_song_presets(self, song):
-        """그 곡의 학습 프리셋(results/<ts>/result.txt) 목록, loss 오름차순."""
+        """그 곡의 학습 프리셋(results/<ts>/result.txt) 목록, loss 오름차순.
+        Stage1+Stage2가 한 파일에 있으면 각 run의 최종 best 블록 기준."""
         import glob
-        import re
         base = os.path.join(ROOT, "work", "songs", song)
         items = []
         for rp in glob.glob(os.path.join(base, "results", "*", "result.txt")):
             try:
-                text = open(rp, encoding="utf-8").read()
+                best = self._best_block(open(rp, encoding="utf-8").read())
             except OSError:
                 continue
-            m = re.search(r"loss=([\d.]+)", text)
-            loss = float(m.group(1)) if m else float("inf")
+            if not best:
+                continue
+            loss, _, btext = best
             ts = os.path.basename(os.path.dirname(rp))
-            label = (f"loss {loss:7.2f} | {ts} | AMP {self._chain_tag(text, 'AMP')}"
-                     f" / CAB {self._chain_tag(text, 'CAB')}")
+            label = (f"loss {loss:7.2f} | {ts} | AMP {self._chain_tag(btext, 'AMP')}"
+                     f" / CAB {self._chain_tag(btext, 'CAB')}")
             items.append({"path": rp, "loss": loss, "label": label})
         items.sort(key=lambda d: d["loss"])
         return items

@@ -11,7 +11,7 @@ import re
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 from fx150_protocol import crc16
-from fx150_spec import CHAIN_CMD, load_spec, para_steps
+from fx150_spec import CHAIN_CMD, load_spec
 
 SPEC = load_spec()
 CMD2CHAIN = {v: k for k, v in CHAIN_CMD.items()}

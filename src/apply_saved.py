@@ -9,6 +9,7 @@ candidate 출처: best_candidate.json의 "candidate", 또는 result.txt의 '# ra
 import argparse
 import ast
 import json
+import re
 import sys
 import time
 
@@ -26,11 +27,24 @@ def load_candidate(path):
             return obj.get("candidate", obj)
     except json.JSONDecodeError:
         pass
-    marker = text.rfind("# raw")            # result.txt: '# raw' 다음 줄의 파이썬 dict
-    if marker == -1:
-        raise SystemExit(f"candidate를 못 찾음 (json도 '# raw'도 아님): {path}")
-    raw = text[marker:].split("\n", 1)[1].strip()
-    return ast.literal_eval(raw)
+    # result.txt: 여러 '=== label (loss=X) ===' 블록 중 loss 최소 블록의 candidate
+    # (Stage1+Stage2가 같이 적힌 경우 최종 best를 골라야 함)
+    best = None
+    for b in re.split(r"^=== ", text, flags=re.M)[1:]:
+        m = re.search(r"loss=([\d.]+)", b)
+        r = b.find("# raw")
+        if not m or r == -1:
+            continue
+        try:
+            cand = ast.literal_eval(b[r:].split("\n", 1)[1].strip())
+        except (SyntaxError, ValueError):
+            continue
+        loss = float(m.group(1))
+        if best is None or loss < best[0]:
+            best = (loss, cand)
+    if best is None:
+        raise SystemExit(f"candidate를 못 찾음 (json도 블록도 아님): {path}")
+    return best[1]
 
 
 def main():

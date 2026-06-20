@@ -29,7 +29,6 @@ def main():
     hits = 0
     saved = 0
     spec_found = False
-    i = 0
     # zlib 헤더 후보: 0x78 0x01 / 0x78 0x9c / 0x78 0xda
     for m in re.finditer(rb"\x78[\x01\x9c\xda]", data):
         pos = m.start()

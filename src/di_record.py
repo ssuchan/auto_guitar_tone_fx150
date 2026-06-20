@@ -9,7 +9,6 @@
 끝나면 RMS를 출력 — 0에 가까우면 기타 미연결/볼륨0/잘못된 장치이므로 경고.
 주의: bypass는 활성 프리셋의 워킹버퍼를 건드림(플래시 저장 X). 프리셋 다시 부르면 복구.
 """
-import sys
 import time
 import numpy as np
 import sounddevice as sd
