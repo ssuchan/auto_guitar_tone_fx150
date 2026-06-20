@@ -406,7 +406,14 @@ class App:
         ttk.Button(frm, text="이전 프리셋", command=self._open_preset_browser).grid(
             row=2, column=3, sticky="we", padx=4)
         field(3, "Stage1 횟수", "s1", "100", 10)
-        field(4, "Stage2 횟수", "s2", "50", 10)
+        # Stage2(딜레이/리버브) 자동탐색: 손실이 시간계 효과를 못 잡아 랜덤값이 박힘 →
+        # 기본 OFF(체크 시에만). 끄면 깔끔한 앰프/캡/EQ 프리셋, 딜레이/리버브는 페달에서 귀로.
+        ttk.Label(frm, text="Stage2 횟수").grid(row=4, column=0, sticky="e", padx=4, pady=3)
+        self.v["s2"] = tk.StringVar(value="50")
+        ttk.Entry(frm, textvariable=self.v["s2"], width=10).grid(row=4, column=1, sticky="w", padx=4)
+        self.search_fx = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="딜레이·리버브 자동탐색(비추천)", variable=self.search_fx).grid(
+            row=4, column=2, columnspan=2, sticky="w", padx=4)
         # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
         ttk.Label(frm, text="play-gain").grid(row=5, column=0, sticky="e", padx=4, pady=3)
         self.v["gain"] = tk.StringVar(value="0.4")
@@ -518,6 +525,8 @@ class App:
                 raise ValueError("곡 제목을 입력하세요.")
             s1 = self._num_field("s1", "Stage1 횟수", 1, 1000, cast=int)
             s2 = self._num_field("s2", "Stage2 횟수", 0, 1000, cast=int)
+            if not self.search_fx.get():
+                s2 = 0   # 딜레이/리버브 자동탐색 OFF(기본) → Stage 2 스킵(랜덤 효과 방지)
             gain = self._num_field("gain", "play-gain", 0.01, 2.0)
             name = self.v["name"].get().strip()
             slot = self.v["slot"].get().strip()
