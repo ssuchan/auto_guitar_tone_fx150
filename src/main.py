@@ -76,6 +76,7 @@ DEFAULT_CHAINS = {
 # Stage 2: DELAY/REVERB만 선택적으로 탐색. MOD는 제외(피치/페이저 등 엉뚱한 게 자주
 # 골라져 기본 톤을 망침 → 항상 bypass 유지). 필요하면 여기 "MOD" 다시 추가.
 STAGE2_CHAINS = {"DELAY", "REVERB"}
+STAGE2_FLUSH_SEC = 1.5   # Stage 2 캡처 전 무음 프리롤(초) — 직전 trial 잔향 흘려보냄
 
 
 def _make_stage2_config(best1):
@@ -345,6 +346,9 @@ def main():
         run_stage2 = args.stage2_trials > 0 and not args.mock and not prev_best
         if run_stage2:
             ev.reset_tracking()   # prev 초기화 → Stage 2 첫 trial이 전 체인 정합 전송
+            # 잔향 오염 방지: Stage 2부터 켜고 robust 재평가까지 유지(robust가 딜레이/리버브
+            # 후보를 고르는 지점이라 여기서 끄면 오염된 평균으로 잘못된 최종 선택을 함).
+            ev.flush_sec = STAGE2_FLUSH_SEC
             cfg2 = _make_stage2_config(best1)
             n_coarse2 = max(1, args.stage2_trials // 3)
             print(f"\n{'─'*50}")
@@ -385,6 +389,11 @@ def main():
             if rb_cand is not None:
                 print(f"[Robust] final loss {final_loss:.4f} → {rb_mean:.4f} (평균)")
                 final_best, final_loss = rb_cand, rb_mean
+                # robust가 Stage 표시 best와 다른 후보를 고를 수 있다. 실제 저장되는 건
+                # 이 final_best이므로 result.txt에도 별도 블록으로 남긴다(표시≠저장 혼동 방지).
+                results.append({"label": "Final (robust 선택 = 실제 저장본)",
+                                "best": rb_cand, "loss": rb_mean,
+                                "study": final_study, "parts": None})
 
         # 이전 결과 이어하기(--resume)용 best 후보 저장(매 run 최신으로 갱신)
         if not args.mock and final_best is not None:

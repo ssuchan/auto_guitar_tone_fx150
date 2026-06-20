@@ -145,6 +145,7 @@ class ReampEvaluator:
         self.best_rec = None
         self._silent_streak = 0     # 연속 무음 trial 수 — wedge 조기 중단용
         self._di_full = self.di     # 멀티-피델리티: 풀 DI 보관(set_fidelity로 전환)
+        self.flush_sec = 0.0        # >0(Stage 2)이면 캡처 전 무음 프리롤로 직전 잔향 흘림
 
     def set_fidelity(self, sec):
         """재생 DI 길이 전환(멀티-피델리티). Stage A는 짧게(모델 순위만 보면 됨 →
@@ -160,7 +161,14 @@ class ReampEvaluator:
         self.best_rec = None
 
     def reamp(self):
-        """DI 재생 + FX150 캡처 동시. 독립 Stream으로 서로 정지 안 시킴."""
+        """DI 재생 + FX150 캡처 동시. 독립 Stream으로 서로 정지 안 시킴.
+
+        flush_sec>0(Stage 2)이면 캡처 직전 그만큼 무음 대기 → 직전 trial의 딜레이/리버브
+        잔향이 자연 감쇠한 뒤 캡처. 재생/트림은 평상시와 동일이라 캡처 톤을 왜곡하지 않는다.
+        (DI 앞 프리롤+트림 방식은 재생-캡처 레이턴시로 DI를 오정렬시켜 톤이 바뀜 → 폐기.
+         sleep 방식은 wet→wet 오염 0.61→0.21(노이즈바닥 0.16)로 줄고 왜곡 없음 — 실측 검증.)"""
+        if self.flush_sec > 0:
+            time.sleep(self.flush_sec)
         out = np.clip(self.di * self.play_gain, -1.0, 1.0)
         out = np.column_stack([out, out])   # 모노 → 스테레오 출력
         captured = []
