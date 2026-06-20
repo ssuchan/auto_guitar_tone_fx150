@@ -63,32 +63,56 @@ def restore_preset(slot):
         print(f"(복구 실패 — 페달에서 프리셋 다시 누르면 복구됨: {e})")
 
 
-def _start_playalong(path):
+def _start_playalong(path, gain=0.4):
     """녹음과 동시에 타겟을 기본 출력으로 재생(따라치기). 별도 OutputStream을 스레드로
-    돌려 sd.rec(입력)과 충돌 안 함. DI는 기타 직결이라 스피커 소리가 안 섞임. 핸들 반환."""
+    돌려 sd.rec(입력)과 충돌 안 함. DI는 기타 직결이라 스피커 소리가 안 섞임.
+    gain으로 재생 볼륨을 낮춘다(타겟이 너무 크면 연주 모니터링 방해).
+    데이터를 청크로 쓰고 stop 이벤트로 중단 — 녹음 끝에 스트림을 닫을 때 쓰기 스레드가
+    네이티브 write() 안에 있으면 액세스 위반(크래시)이 나므로, 먼저 스레드를 빼낸다.
+    (stop_event, thread, stream) 반환."""
     try:
         import threading
         data, psr = sf.read(path, dtype="float32")
+        data = (data * gain).astype("float32")
         chans = data.shape[1] if data.ndim > 1 else 1
-        os_ = sd.OutputStream(samplerate=psr, channels=chans)
-        os_.start()
-        threading.Thread(target=lambda: _safe_write(os_, data), daemon=True).start()
-        print(f"♪ 타겟 같이 재생(따라치기): {path}")
-        return os_
+        stream = sd.OutputStream(samplerate=psr, channels=chans)
+        stream.start()
+        stop = threading.Event()
+
+        def _pump():
+            block = 2048
+            for i in range(0, len(data), block):
+                if stop.is_set():
+                    break
+                try:
+                    stream.write(data[i:i + block])
+                except Exception:
+                    break
+
+        th = threading.Thread(target=_pump, daemon=True)
+        th.start()
+        print(f"♪ 타겟 같이 재생(따라치기, 볼륨 {gain:.0%}): {path}")
+        return stop, th, stream
     except Exception as e:
         print(f"(play-along 생략: {e})")
         return None
 
 
-def _safe_write(stream, data):
+def _stop_playalong(play):
+    """쓰기 스레드를 먼저 종료(write 밖으로 나오게)한 뒤 스트림을 닫아 액세스 위반 방지."""
+    if play is None:
+        return
+    stop, th, stream = play
+    stop.set()
+    th.join(timeout=1.0)
     try:
-        stream.write(data)
+        stream.stop(); stream.close()
     except Exception:
         pass
 
 
 def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None,
-           play_along=None):
+           play_along=None, play_gain=0.4):
     if bypass:
         bypass_fx()
     fx = find_fx150()
@@ -103,14 +127,10 @@ def record(out_wav="my_di.wav", seconds=15.0, bypass=True, restore_slot=None,
         print(f"  {n}..."); time.sleep(1.0)
     print("● recording")
 
-    play_stream = _start_playalong(play_along) if play_along else None
+    play = _start_playalong(play_along, play_gain) if play_along else None
     rec = sd.rec(int(sr * seconds), samplerate=sr, channels=ch, dtype="float32", device=idx)
     sd.wait()
-    if play_stream is not None:
-        try:
-            play_stream.stop(); play_stream.close()
-        except Exception:
-            pass
+    _stop_playalong(play)
     rec = np.asarray(rec)
     mono = rec.mean(axis=1) if rec.ndim > 1 else rec
     # 녹음 시작 pop/click 제거(첫 200ms). sd.rec 스트림 시작 트랜지언트가 파일 맨 앞에
@@ -152,9 +172,11 @@ def main():
                     help="녹음 후 이 슬롯(숫자/38A) 재로드로 bypass 복구")
     ap.add_argument("--play-along", default=None,
                     help="녹음과 동시에 이 wav(타겟)를 재생 → 따라치면 템포/타이밍 자동 정렬")
+    ap.add_argument("--play-gain", type=float, default=0.4,
+                    help="play-along 타겟 재생 볼륨(0~1, 기본 0.4)")
     a = ap.parse_args()
     record(a.out, a.secs, bypass=not a.no_bypass, restore_slot=a.restore_slot,
-           play_along=a.play_along)
+           play_along=a.play_along, play_gain=a.play_gain)
 
 
 if __name__ == "__main__":

@@ -433,6 +433,13 @@ class App:
         ttk.Button(btns, text="리프 체크", command=self._riff_check, width=8).grid(row=0, column=3, padx=(0, 6))
         self.playalong = tk.BooleanVar(value=True)
         ttk.Checkbutton(btns, text="타겟 들으며", variable=self.playalong).grid(row=0, column=4)
+        # 따라치기 타겟 재생 볼륨(%) 슬라이더 → --play-gain. 라벨에 현재값 표시.
+        self.play_vol = tk.DoubleVar(value=40)
+        self.play_vol_lbl = ttk.Label(btns, text="40%", width=4)
+        ttk.Scale(btns, from_=0, to=100, orient="horizontal", length=80, variable=self.play_vol,
+                  command=lambda v: self.play_vol_lbl.config(text=f"{float(v):.0f}%")
+                  ).grid(row=0, column=5, padx=(6, 0))
+        self.play_vol_lbl.grid(row=0, column=6)
 
         # 게인 레벨 체크박스(복수 선택). 선택한 캐릭터의 AMP 모델만 탐색(전부 해제=전체).
         ttk.Label(frm, text="게인 레벨\n(곡 성격, 복수)").grid(row=9, column=0, sticky="e", padx=4, pady=3)
@@ -587,7 +594,7 @@ class App:
             cmd += ["--restore-slot", slotfield]
         tgt = os.path.join(songdir, "target.wav")   # 타겟 들으며 녹음(따라치기 → 정렬)
         if self.playalong.get() and os.path.exists(tgt):
-            cmd += ["--play-along", tgt]
+            cmd += ["--play-along", tgt, "--play-gain", f"{self.play_vol.get() / 100:.3f}"]
         self.rec_btn.config(text="녹음 중...")
         self._run_cmds([("DI 녹음", cmd)])
 
