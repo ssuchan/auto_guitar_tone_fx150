@@ -88,6 +88,9 @@ class App:
         root.title("auto_guitar_tone — FX150 톤 학습")
         self._build()
         self._load_state()                                   # 이전 폼 값 복원
+        # 곡이 바뀌면 '이어개선 대상' 표시 갱신 + 시작 시 1회.
+        self.v["song"].trace_add("write", lambda *a: self._refresh_resume_label())
+        self._refresh_resume_label()
         root.protocol("WM_DELETE_WINDOW", self._on_close)     # 닫을 때 저장
         self.root.after(100, self._drain)
         self.root.after(400, self._check_spec)                # 스펙 없으면 추출 제안
@@ -176,6 +179,34 @@ class App:
                 rhs = line.split(":", 1)[1].strip()
                 return rhs.split("|")[0].strip()[:22]
         return "-"
+
+    def _resume_source_info(self, song):
+        """이어개선 대상(best_candidate.json)의 'loss·일시' 문구. 없으면 None."""
+        if not song:
+            return None
+        path = os.path.join(ROOT, "work", "songs", song, "best_candidate.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        import datetime
+        dt = None
+        ts = data.get("source_ts")              # 브라우저 import 시 기록한 원본 run 시각
+        if ts:
+            try:
+                dt = datetime.datetime.strptime(ts, "%Y%m%d_%H%M%S")
+            except ValueError:
+                dt = None
+        if dt is None:                          # 없으면 파일 수정시각(=마지막 학습)
+            dt = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+        loss = data.get("loss")
+        loss_s = f"{loss:.2f}" if isinstance(loss, (int, float)) else "?"
+        return f"→ loss {loss_s}\n{dt.strftime('%m/%d %H:%M')}"
+
+    def _refresh_resume_label(self):
+        info = self._resume_source_info(self.v["song"].get().strip())
+        self.resume_label.set(info or "→ 대상 없음")
 
     def _apply_song_url_time(self, song):
         """곡 settings.json에서 유튜브 링크/구간(start/end)만 폼에 복원(있으면)."""
@@ -293,13 +324,15 @@ class App:
             if not it:
                 return
             loss, cand = self._parse_result_candidate(it["path"])
+            ts = os.path.basename(os.path.dirname(it["path"]))   # results/<ts>
             base = os.path.join(ROOT, "work", "songs", song)
             with open(os.path.join(base, "best_candidate.json"), "w",
                       encoding="utf-8") as f:
-                json.dump({"loss": loss, "candidate": cand}, f,
+                json.dump({"loss": loss, "candidate": cand, "source_ts": ts}, f,
                           ensure_ascii=False, indent=2)
             self.v["song"].set(song)
             self.resume.set(True)
+            self._refresh_resume_label()                        # 개선 대상 표시 갱신
             win.destroy()
             self._append(f"[이어서 개선] '{song}' 프리셋(loss {loss:.2f})을 출발점으로 "
                          "설정했어요. [학습하기]를 누르면 이 톤부터 개선합니다.\n")
@@ -391,8 +424,13 @@ class App:
             row=0, column=len(GAIN_LEVELS), padx=(12, 0))
 
         self.resume = tk.BooleanVar(value=False)   # 이전 best에서 이어 개선(--resume)
-        ttk.Checkbutton(frm, text="이전 best\n이어 개선", variable=self.resume).grid(
-            row=10, column=0, sticky="w", padx=4)
+        self.resume_label = tk.StringVar(value="→ 대상 없음")  # 개선 대상 프리셋(loss·일시)
+        res = ttk.Frame(frm)
+        res.grid(row=10, column=0, sticky="w", padx=4)
+        ttk.Checkbutton(res, text="이전 best\n이어 개선", variable=self.resume).grid(
+            row=0, column=0, sticky="w")
+        ttk.Label(res, textvariable=self.resume_label, foreground="#666",
+                  font=("", 8)).grid(row=1, column=0, sticky="w")
         self.btn = ttk.Button(frm, text="학습하기", command=self._start)
         self.btn.grid(row=10, column=1, columnspan=2, pady=8, sticky="we")
         self.stop_btn = ttk.Button(frm, text="중지", command=self._stop, state="disabled")
@@ -603,6 +641,7 @@ class App:
                         self._append("\n■ 중지됨.\n")
                     else:
                         self._append("\n🎉 완료!\n" if payload else "\n실패/중단됨.\n")
+                    self._refresh_resume_label()    # 학습으로 best_candidate.json 갱신됐을 수 있음
         except queue.Empty:
             pass
         self.root.after(100, self._drain)
