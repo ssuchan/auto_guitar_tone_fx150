@@ -136,12 +136,36 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     return (dist, parts) if return_parts else dist
 
 
-def riff_match(di, target):
-    """DI 녹음과 타겟의 템포 비교. 반환: tempo_di/tempo_tg(BPM), tempo_pct.
+def _note_match_pct(di, target):
+    """basic-pitch로 음(노트)을 추출해 Levenshtein 편집거리로 리프 일치% 계산.
 
-    ※노트(음) 일치 자동측정은 뺐음 — chroma 유사도가 같은리프/다른리프 변별이 약해
-    (실측 89 vs 84, 파워코드·딴리프도 80%대) 가짜 확신만 줌. 음 일치는 귀로 확인.
-    템포도 가끔 half/double 추정오류가 있으니 BPM 숫자를 같이 보고 판단."""
+    chroma(에너지)와 달리 실제 음 시퀀스를 비교 → 같은리프/다른리프 변별 신뢰 가능
+    (실측 3x3: 같은리프 33~38%, 다른리프 10~24%). basic-pitch 미설치면 None 반환.
+    설치(py3.14): pip install basic-pitch --no-deps  +  pip install onnxruntime
+    mir_eval pretty_midi Levenshtein resampy  (표준 설치는 구 tensorflow핀으로 깨짐)."""
+    import os, contextlib
+    try:
+        import Levenshtein
+        with open(os.devnull, "w") as dn, contextlib.redirect_stdout(dn), \
+                contextlib.redirect_stderr(dn):
+            from basic_pitch.inference import predict
+            from basic_pitch import ICASSP_2022_MODEL_PATH
+
+            def _seq(p):
+                notes = predict(p, ICASSP_2022_MODEL_PATH)[2]   # (start,end,pitch,..)
+                return "".join(chr(int(n[2])) for n in sorted(notes, key=lambda n: n[0]))
+
+            return 100.0 * Levenshtein.ratio(_seq(di), _seq(target))
+    except Exception:
+        return None
+
+
+def riff_match(di, target):
+    """DI 녹음과 타겟의 리프 일치 추정. 반환: tempo_di/tempo_tg(BPM), tempo_pct,
+    note_pct(basic-pitch 음 일치% — 없으면 키 생략).
+
+    템포는 librosa(신뢰, 단 가끔 half/double 추정오류 → BPM 숫자 같이 보기). 음 일치는
+    basic-pitch 노트 시퀀스+편집거리(신뢰, 실측 3x3 변별). chroma 방식은 변별 약해 폐기."""
     import librosa
 
     def _tempo(p):
@@ -152,8 +176,12 @@ def riff_match(di, target):
             librosa.feature.tempo(onset_envelope=oe, sr=SR, hop_length=HOP))[0])
 
     td, tt = _tempo(di), _tempo(target)
-    tempo_pct = 100.0 * (1 - min(abs(td - tt) / max(td, tt, 1.0), 1.0))
-    return {"tempo_di": td, "tempo_tg": tt, "tempo_pct": tempo_pct}
+    out = {"tempo_di": td, "tempo_tg": tt,
+           "tempo_pct": 100.0 * (1 - min(abs(td - tt) / max(td, tt, 1.0), 1.0))}
+    note = _note_match_pct(di, target)
+    if note is not None:
+        out["note_pct"] = note
+    return out
 
 
 if __name__ == "__main__":

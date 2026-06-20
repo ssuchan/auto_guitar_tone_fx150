@@ -302,17 +302,23 @@ class App:
         if not (os.path.exists(di) and os.path.exists(tg)):
             messagebox.showerror("파일 없음", "di.wav와 target.wav가 둘 다 있어야 해요.")
             return
-        self._append("[리프 체크] 계산 중...(수초)\n")
+        self._append("[리프 체크] 음 분석 중...(10~20초)\n")
 
         def work():
             try:
                 from tone_loss import riff_match
                 r = riff_match(di, tg)
-                self.q.put(("log",
-                    "[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM)\n"
-                    "  ※ BPM 숫자가 비슷하면 OK(둘이 ~2배 차이면 추정오류). 음(노트) "
-                    "일치는 자동측정 신뢰불가 → '타겟 듣기'로 귀로 확인하세요.\n"
-                    % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"])))
+                msg = ("[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM)\n"
+                       % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"]))
+                if "note_pct" in r:    # basic-pitch 음 일치(신뢰): 같은리프 ~33-38%, 다른 ~10-24%
+                    n = r["note_pct"]
+                    verdict = "같은 리프로 보임 ✓" if n >= 28 else "다른 리프/연주 차이 큼 ✗"
+                    msg += ("  음(노트) 일치 %.0f%% → %s "
+                            "(같은리프 보통 ≥30%%, 딴리프 ≤25%%)\n" % (n, verdict))
+                else:
+                    msg += ("  ※ 음 일치는 basic-pitch 미설치로 생략 → '타겟 듣기'로 귀 확인\n")
+                msg += "  ※ BPM이 ~2배 차이면 추정오류일 수 있음.\n"
+                self.q.put(("log", msg))
             except Exception as e:
                 self.q.put(("log", f"[리프 체크] 실패: {e}\n"))
 

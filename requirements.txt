@@ -6,3 +6,13 @@ hidapi
 yt-dlp
 demucs
 optuna
+
+# GUI '리프 체크' 음(노트) 일치용 (선택 — 없으면 템포만 표시).
+# basic-pitch는 구 tensorflow를 핀해 py3.14 표준설치가 깨짐 → 아래로 설치:
+#   pip install basic-pitch --no-deps
+#   pip install onnxruntime mir_eval pretty_midi Levenshtein resampy
+onnxruntime
+mir_eval
+pretty_midi
+Levenshtein
+resampy
