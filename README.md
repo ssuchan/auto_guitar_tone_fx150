@@ -58,10 +58,10 @@ pip install -r requirements.txt
   템포 비교만 표시됩니다. 설치하려면 `requirements.txt` 안내를 따르세요.
 - 처음 학습 시 Demucs(기타 분리) 모델이 자동으로 다운로드됩니다(수백 MB, 1회).
 - **FX150 파라미터 스펙 생성** (`spec/preset.xml`): 이 저장소는 FLAMMA의 데이터를 포함하지
-  않습니다. FX150 공식 SW가 설치된 PC에서 `python src/extract_qrc.py`를 실행하면
-  `extracted/`에 리소스가 추출됩니다. 그중 `<?xml ... <preset>`로 시작하는
-  스트림(`stream_*_xml.txt`)을 찾아 `spec/preset.xml`로 저장하세요.
+  않습니다. FX150 공식 SW가 설치된 PC에서 `python src/extract_qrc.py` 한 줄을 실행하면
+  스펙을 자동으로 찾아 `spec/preset.xml`로 저장합니다(`[완료]` 메시지 확인).
   (SW 설치 경로가 다르면 exe 경로를 인자로: `python src/extract_qrc.py "D:\...\FX150.exe"`)
+  GUI를 처음 켤 때 스펙이 없으면 추출 여부를 물어봅니다.
 
 ## 4. 사용법 (GUI)
 

@@ -90,6 +90,7 @@ class App:
         self._load_state()                                   # 이전 폼 값 복원
         root.protocol("WM_DELETE_WINDOW", self._on_close)     # 닫을 때 저장
         self.root.after(100, self._drain)
+        self.root.after(400, self._check_spec)                # 스펙 없으면 추출 제안
 
     def _form_data(self):
         data = {k: var.get() for k, var in self.v.items()}
@@ -133,18 +134,152 @@ class App:
             except OSError:
                 pass
 
-    def _load_song_settings(self):
-        sp = self._song_settings_path()
-        if not sp:
-            messagebox.showerror("입력 오류", "곡 제목을 먼저 입력하세요.")
+    # ── FX150 파라미터 스펙(spec/preset.xml) 확인/추출 ──────────────────
+    def _spec_path(self):
+        return os.path.join(ROOT, "spec", "preset.xml")
+
+    def _check_spec(self):
+        """시작 시 스펙 없으면 추출 제안."""
+        if not os.path.exists(self._spec_path()):
+            self._prompt_extract_spec()
+
+    def _prompt_extract_spec(self):
+        if messagebox.askyesno(
+                "FX150 스펙 없음",
+                "파라미터 스펙(spec/preset.xml)이 없어 학습할 수 없어요.\n"
+                "지금 FX150 공식 SW에서 추출할까요? (FX150 SW가 설치돼 있어야 함)"):
+            self._extract_spec()
+
+    def _extract_spec(self):
+        if self.worker and self.worker.is_alive():
             return
-        try:
-            with open(sp, encoding="utf-8") as f:
-                self._apply_data(json.load(f))
-            self._append(f"[설정 불러옴] {self.v['song'].get()}\n")
-        except (FileNotFoundError, json.JSONDecodeError):
-            messagebox.showinfo("없음", "이 곡의 저장된 설정이 없어요.\n"
-                                "(학습/녹음 또는 GUI 종료 시 자동 저장됩니다)")
+        cmd = [self.py, "-u", os.path.join(SRC, "extract_qrc.py")]
+        self._run_cmds([("FX150 스펙 추출", cmd)])
+
+    # ── 이전 프리셋 가져오기 (곡 → 학습 프리셋 선택 → 적용/이어개선) ────────
+    def _parse_result_candidate(self, result_path):
+        """result.txt에서 (loss, candidate dict) 파싱."""
+        import ast
+        import re
+        text = open(result_path, encoding="utf-8").read()
+        m = re.search(r"loss=([\d.]+)", text)
+        loss = round(float(m.group(1)), 4) if m else 0.0
+        marker = text.rfind("# raw")
+        cand = ast.literal_eval(text[marker:].split("\n", 1)[1].strip())
+        return loss, cand
+
+    @staticmethod
+    def _chain_tag(text, chain):
+        """result.txt에서 한 체인의 'model: 이름' 요약 (목록 표시용)."""
+        for line in text.splitlines():
+            if line.startswith(chain) and ":" in line:
+                rhs = line.split(":", 1)[1].strip()
+                return rhs.split("|")[0].strip()[:22]
+        return "-"
+
+    def _list_song_presets(self, song):
+        """그 곡의 학습 프리셋(results/<ts>/result.txt) 목록, loss 오름차순."""
+        import glob
+        import re
+        base = os.path.join(ROOT, "work", "songs", song)
+        items = []
+        for rp in glob.glob(os.path.join(base, "results", "*", "result.txt")):
+            try:
+                text = open(rp, encoding="utf-8").read()
+            except OSError:
+                continue
+            m = re.search(r"loss=([\d.]+)", text)
+            loss = float(m.group(1)) if m else float("inf")
+            ts = os.path.basename(os.path.dirname(rp))
+            label = (f"loss {loss:7.2f} | {ts} | AMP {self._chain_tag(text, 'AMP')}"
+                     f" / CAB {self._chain_tag(text, 'CAB')}")
+            items.append({"path": rp, "loss": loss, "label": label})
+        items.sort(key=lambda d: d["loss"])
+        return items
+
+    def _open_preset_browser(self):
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("불가", "녹음/학습 중에는 할 수 없어요.")
+            return
+        songs_root = os.path.join(ROOT, "work", "songs")
+        songs = sorted(d for d in os.listdir(songs_root)
+                       if os.path.isdir(os.path.join(songs_root, d))) \
+            if os.path.isdir(songs_root) else []
+        if not songs:
+            messagebox.showinfo("없음", "학습한 곡이 없어요.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("이전 프리셋 가져오기")
+        win.geometry("780x440")
+        win.columnconfigure(1, weight=1)
+        win.rowconfigure(1, weight=1)
+
+        ttk.Label(win, text="곡").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 0))
+        ttk.Label(win, text="학습 프리셋 (loss 낮을수록 타겟에 가까움)").grid(
+            row=0, column=1, sticky="w", padx=6, pady=(6, 0))
+        song_lb = tk.Listbox(win, exportselection=False, width=18)
+        song_lb.grid(row=1, column=0, sticky="ns", padx=6, pady=4)
+        for s in songs:
+            song_lb.insert("end", s)
+        preset_lb = tk.Listbox(win, exportselection=False, font=("Consolas", 9))
+        preset_lb.grid(row=1, column=1, sticky="nsew", padx=6, pady=4)
+        state = {"presets": []}
+
+        def on_song(_evt=None):
+            sel = song_lb.curselection()
+            if not sel:
+                return
+            state["presets"] = self._list_song_presets(songs[sel[0]])
+            preset_lb.delete(0, "end")
+            for it in state["presets"]:
+                preset_lb.insert("end", it["label"])
+            if not state["presets"]:
+                preset_lb.insert("end", "(이 곡엔 저장된 학습 결과가 없어요)")
+
+        def selected():
+            ps, sel = state["presets"], preset_lb.curselection()
+            if not ps or not sel or sel[0] >= len(ps):
+                messagebox.showinfo("선택", "프리셋을 먼저 고르세요.")
+                return None, None
+            return songs[song_lb.curselection()[0]], ps[sel[0]]
+
+        def do_apply():
+            song, it = selected()
+            if not it:
+                return
+            cmd = [self.py, "-u", os.path.join(SRC, "apply_saved.py"), it["path"]]
+            name, slot = self.v["name"].get().strip(), self.v["slot"].get().strip()
+            if name:                        # 폼의 저장 이름이 있으면 슬롯 저장까지
+                cmd += ["--save-name", name]
+                if slot:
+                    cmd += ["--save-slot", slot]
+            win.destroy()
+            self._run_cmds([("FX150에 적용", cmd)])
+
+        def do_resume():
+            song, it = selected()
+            if not it:
+                return
+            loss, cand = self._parse_result_candidate(it["path"])
+            base = os.path.join(ROOT, "work", "songs", song)
+            with open(os.path.join(base, "best_candidate.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"loss": loss, "candidate": cand}, f,
+                          ensure_ascii=False, indent=2)
+            self.v["song"].set(song)
+            self.resume.set(True)
+            win.destroy()
+            self._append(f"[이어서 개선] '{song}' 프리셋(loss {loss:.2f})을 출발점으로 "
+                         "설정했어요. [학습하기]를 누르면 이 톤부터 개선합니다.\n")
+
+        song_lb.bind("<<ListboxSelect>>", on_song)
+        btns = ttk.Frame(win)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e", padx=6, pady=6)
+        ttk.Button(btns, text="FX150에 적용", command=do_apply).grid(row=0, column=0, padx=4)
+        ttk.Button(btns, text="이 프리셋부터 이어서 개선", command=do_resume).grid(
+            row=0, column=1, padx=4)
+        ttk.Button(btns, text="닫기", command=win.destroy).grid(row=0, column=2, padx=4)
 
     def _on_close(self):
         self._save_state()
@@ -179,7 +314,7 @@ class App:
         self.v["song"] = tk.StringVar()
         ttk.Entry(frm, textvariable=self.v["song"], width=30).grid(
             row=2, column=1, columnspan=2, sticky="we", padx=4)
-        ttk.Button(frm, text="설정 불러오기", command=self._load_song_settings).grid(
+        ttk.Button(frm, text="이전 프리셋", command=self._open_preset_browser).grid(
             row=2, column=3, sticky="we", padx=4)
         field(3, "Stage1 횟수", "s1", "100", 10)
         field(4, "Stage2 횟수", "s2", "50", 10)
@@ -244,6 +379,9 @@ class App:
 
     def _start(self):
         if self.worker and self.worker.is_alive():
+            return
+        if not os.path.exists(self._spec_path()):     # 스펙 없으면 학습 불가 → 추출 유도
+            self._prompt_extract_spec()
             return
         try:
             url = self.v["url"].get().strip()
