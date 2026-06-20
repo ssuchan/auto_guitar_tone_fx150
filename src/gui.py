@@ -46,6 +46,7 @@ def parse_time(s):
 
 
 GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
+DUR_MIN, DUR_MAX = 3, 30          # 구간 길이(초) 하한/상한. 길면 리프체크↓·다운로드/학습 느림.
 
 
 def build_commands(py, *, song, s1, s2, gain, name, slot,
@@ -479,6 +480,25 @@ class App:
         self.log.see("end")
         self.log.config(state="disabled")
 
+    def _num_field(self, key, label, lo, hi, *, cast=float):
+        """폼 숫자 필드를 cast + 범위검사. 벗어나면 ValueError(메시지)."""
+        raw = self.v[key].get().strip()
+        try:
+            v = cast(raw)
+        except (ValueError, TypeError):
+            raise ValueError(f"{label}: 숫자를 입력하세요 (입력: '{raw}').")
+        if not (lo <= v <= hi):
+            raise ValueError(f"{label}: {lo}~{hi} 범위여야 해요 (입력: {raw}).")
+        return v
+
+    def _time_field(self, key, label):
+        """'mm:ss' 또는 '초' 파싱. 형식 오류면 ValueError, 빈칸은 None."""
+        raw = self.v[key].get().strip()
+        try:
+            return parse_time(raw)
+        except (ValueError, TypeError):
+            raise ValueError(f"{label}: 시간 형식 오류 (예 1:30 또는 90, 입력 '{raw}').")
+
     def _start(self):
         if self.worker and self.worker.is_alive():
             return
@@ -489,9 +509,9 @@ class App:
             song = self.v["song"].get().strip()
             if not song:
                 raise ValueError("곡 제목을 입력하세요.")
-            s1 = int(self.v["s1"].get())
-            s2 = int(self.v["s2"].get())
-            gain = float(self.v["gain"].get())
+            s1 = self._num_field("s1", "Stage1 횟수", 1, 1000, cast=int)
+            s2 = self._num_field("s2", "Stage2 횟수", 0, 1000, cast=int)
+            gain = self._num_field("gain", "play-gain", 0.01, 2.0)
             name = self.v["name"].get().strip()
             slot = self.v["slot"].get().strip()
             if name and len(name.encode("ascii", "ignore")) > 11:
@@ -527,18 +547,23 @@ class App:
         if not song:
             messagebox.showerror("입력 오류", "곡 제목을 먼저 입력하세요 (타겟 저장 위치).")
             return
-        start = parse_time(self.v["start"].get())
-        end = parse_time(self.v["end"].get())
-        if start is not None and end is not None and end <= start:
-            messagebox.showerror("입력 오류", "끝 시간이 시작 시간보다 커야 합니다.")
+        try:
+            start = self._time_field("start", "시작 시간")
+            end = self._time_field("end", "끝 시간")
+            if start is None or end is None:
+                raise ValueError("구간(시작~끝)을 모두 입력하세요.")
+            if start < 0 or end < 0:
+                raise ValueError("구간 시간은 0 이상이어야 해요.")
+            dur = end - start
+            if not (DUR_MIN <= dur <= DUR_MAX):
+                raise ValueError(
+                    f"구간 길이는 {DUR_MIN}~{DUR_MAX}초여야 해요 (현재 {dur:.0f}초).\n"
+                    "짧고 또렷한 리프 구간일수록 리프 체크·학습이 정확합니다.")
+        except ValueError as e:
+            messagebox.showerror("입력 오류", str(e))
             return
-        dur = (end - start) if (start is not None and end is not None) else None
-        fetch = [self.py, "-u", os.path.join(SRC, "fetch_separate.py"), url]
-        if start is not None:
-            fetch.append(str(start))
-        if dur is not None:
-            fetch.append(str(dur))
-        fetch += ["--song", song]
+        fetch = [self.py, "-u", os.path.join(SRC, "fetch_separate.py"), url,
+                 str(start), str(dur), "--song", song]
         self._run_cmds([("다운로드 + 기타 분리", fetch)])
 
     def _record(self):
@@ -549,11 +574,9 @@ class App:
             messagebox.showerror("입력 오류", "곡 제목을 먼저 입력하세요 (DI 저장 위치).")
             return
         try:
-            sec = float(self.v["di_sec"].get())
-            if sec <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("입력 오류", "DI 녹음 길이는 양수(초)여야 합니다.")
+            sec = self._num_field("di_sec", "DI 녹음 길이", 1, 120)
+        except ValueError as e:
+            messagebox.showerror("입력 오류", str(e))
             return
         songdir = os.path.join(ROOT, "work", "songs", song)
         os.makedirs(songdir, exist_ok=True)
