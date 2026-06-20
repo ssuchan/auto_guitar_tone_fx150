@@ -1,182 +1,210 @@
 # auto_guitar_tone
 
-유튜브 일렉기타 커버 영상의 톤을 분석해서, FLAMMA FX150 멀티이펙터의 설정값을
-자동으로 탐색하는 프로그램.
+유튜브 일렉기타 커버 영상의 톤을 분석해서, 그 톤에 가까워지도록
+**FLAMMA FX150 멀티이펙터의 설정값을 자동으로 찾아주는 프로그램**입니다.
+
+내 기타를 한 번 녹음해 두면, 컴퓨터가 FX150의 노브(앰프·드라이브·캐비넷·EQ·딜레이 등)를
+수백 번 바꿔가며 "유튜브 톤과 가장 비슷한 조합"을 스스로 탐색하고, 찾은 설정을
+FX150 프리셋 슬롯에 저장해 줍니다.
+
+```
+[유튜브 링크]                          [내 기타(DI) 녹음]
+     │ 오디오 다운로드(yt-dlp)                │
+     │ 기타 소리만 분리(Demucs)               │
+     ▼                                        ▼
+  목표 톤  ◄────── 얼마나 비슷한가? ────────  FX150로 재생→녹음
+     ▲              (perceptual loss)              ▲
+     │                                              │
+     └──── 더 비슷해지는 설정 제안(Optuna) ─────────┘
+                        │
+                        ▼
+            최종 FX150 설정값 → 프리셋 슬롯에 저장
+```
+
+---
+
+## 1. 준비물
+
+- 노트북 또는 데스크탑 (Windows)
+- **FLAMMA FX150** 멀티이펙터
+- FX150 기본 **C-to-USB 케이블** (FX150 ↔ 컴퓨터)
+- **3.5mm → 6.35mm 케이블** (컴퓨터 이어폰 단자 ↔ FX150 입력잭)
+- 일렉기타 (DI 녹음용)
+
+## 2. 연결 방법
+
+FX150의 기타 입력잭은 **1개뿐**입니다. 그래서 단계에 따라 꽂는 걸 바꿔 줍니다.
+
+| 케이블 | 한쪽 | 다른 쪽 | 언제 |
+|---|---|---|---|
+| C-to-USB | FX150 USB | 컴퓨터 USB | **항상** (제어 + 녹음) |
+| 3.5→6.35 | 컴퓨터 이어폰(초록) 단자 | FX150 **input** 잭 | **학습할 때만** |
+| 기타 | 기타 | FX150 **input** 잭 | **DI 녹음할 때만** |
+
+- **DI 녹음 단계**: 기타를 FX150 input에 꽂는다.
+- **학습 단계**: 기타를 빼고, 그 자리에 3.5→6.35 케이블(컴퓨터 출력)을 꽂는다.
+
+> FX150 설정에서 **USB OUTPUT을 "effected(이펙트 적용)"** 으로 둬야 처리된 소리가 녹음됩니다
+> (매뉴얼 43p). "dry"면 학습이 무음으로 잡혀 동작하지 않습니다.
+
+## 3. 설치
+
+```bash
+pip install -r requirements.txt
+```
+
+- Python 3.13+ 권장.
+- `basic-pitch`(리프 체크의 "음 일치%" 기능)는 선택 사항입니다. 없어도 동작하며
+  템포 비교만 표시됩니다. 설치하려면 `requirements.txt` 안내를 따르세요.
+- 처음 학습 시 Demucs(기타 분리) 모델이 자동으로 다운로드됩니다(수백 MB, 1회).
+- **FX150 파라미터 스펙 생성** (`spec/preset.xml`): 이 저장소는 FLAMMA의 데이터를 포함하지
+  않습니다. FX150 공식 SW가 설치된 PC에서 `python src/extract_qrc.py`를 실행하면
+  `extracted/`에 리소스가 추출됩니다. 그중 `<?xml ... <preset>`로 시작하는
+  스트림(`stream_*_xml.txt`)을 찾아 `spec/preset.xml`로 저장하세요.
+  (SW 설치 경로가 다르면 exe 경로를 인자로: `python src/extract_qrc.py "D:\...\FX150.exe"`)
+
+## 4. 사용법 (GUI)
+
+**`톤학습.bat` 더블클릭** → 검은 창 없이 GUI가 뜹니다.
+
+1. **유튜브 링크 / 구간 / 곡 제목**을 입력한다.
+   - 구간은 `mm:ss`(예 `1:30 ~ 1:50`). 되도록 **20초 이내**의 또렷한 기타 리프 구간이 좋다.
+   - 곡 제목 = 녹음·결과·설정이 저장될 폴더 이름.
+2. 기타를 FX150에 꽂고 **[DI 녹음]** → 유튜브의 그 리프를 따라 친다.
+   - **"타겟 들으며"** 를 켜면 녹음 중 목표 기타 소리가 같이 재생돼 따라치기 쉽다(자동 정렬).
+   - **[타겟 듣기]** 로 목표 소리를, **[DI 듣기]** 로 내 녹음을 확인.
+   - **[리프 체크]** 로 내 연주가 목표와 같은 리프인지(템포·음 일치%) 확인. 만족스러울 때까지 다시 녹음.
+3. 기타를 빼고 **3.5→6.35 케이블**을 FX150 input에 꽂는다.
+4. **게인 레벨**(곡 성격: clean/crunch/overdrive/distortion/metal)을 고른다 — 탐색 효율↑.
+   잘 모르면 **auto(타겟분석)** 체크.
+5. **[학습하기]** → 진행 로그가 아래 창에 실시간 표시된다. (100+50회 기준 약 10~15분)
+6. 끝나면 찾은 설정이 FX150에 적용되고, **저장 이름/슬롯**을 채웠으면 프리셋으로 저장된다.
+
+> 결과가 마음에 안 들면 **"이전 best 이어 개선"** 을 켜고 다시 학습하면, 이전 결과를
+> 출발점으로 더 좋은 톤을 누적 탐색합니다.
+
+### GUI 화면 설명
+
+| 항목 | 설명 |
+|---|---|
+| 유튜브 링크 | 목표 톤이 담긴 영상. **비우면** 다운로드를 건너뛰고 같은 곡 제목의 기존 타겟으로 바로 학습. |
+| 구간 (mm:ss) | 분석할 시작~끝 시간. 짧고 또렷한 리프 구간 권장. |
+| 곡 제목 (폴더명) | 녹음/타겟/결과/설정 저장 폴더(`work/songs/<곡>/`). **[설정 불러오기]** 로 이 곡의 이전 설정 복원. |
+| Stage1 횟수 | 앰프·드라이브·캐비넷·EQ를 탐색하는 1단계 횟수(기본 100). 많을수록 정밀·느림. |
+| Stage2 횟수 | 모듈레이션·딜레이·리버브를 더하는 2단계 횟수(기본 50). `0`이면 건너뜀. |
+| play-gain | 학습 시 FX150로 보내는 재생 레벨. **자동보정(클리핑방지)** 을 켜두는 걸 권장. |
+| 저장 이름 (≤11자) | FX150에 저장될 프리셋 이름(영문/숫자, 최대 11자). **비우면** 적용만 하고 저장 안 함. |
+| 슬롯 (예 38A) | 저장할 프리셋 슬롯. **비우면** 자동 배정. |
+| DI 녹음 길이(초) | 한 번에 녹음할 길이(기본 15초). |
+| 게인 레벨 | 곡 성격(복수 선택 가능). 해당 캐릭터의 앰프 모델만 탐색해 효율↑. **auto**=타겟 분석으로 자동. |
+| 이전 best 이어 개선 | 켜면 이 곡의 이전 best 설정을 출발점으로 이어서 개선(resume). |
+
+---
+
+## 5. 원리
+
+1. **목표 확보** — 유튜브 오디오를 받아(yt-dlp), Demucs로 기타 소리만 분리해 "목표 톤"을 만든다.
+2. **리앰프 루프** — 내 DI(생기타) 녹음을 컴퓨터가 FX150로 흘려보내고, FX150이 처리한 소리를
+   다시 USB로 녹음한다. 이때 FX150의 설정값을 USB(HID)로 프로그램이 직접 바꾼다.
+3. **비교** — 처리된 소리와 목표 톤의 음색 차이를 perceptual loss(MFCC·스펙트럼 대비·밝기 등)로 수치화.
+4. **최적화** — Optuna(베이지안 최적화, TPE)가 loss가 줄어드는 방향으로 다음 설정을 제안.
+   2~3을 수백 번 반복해 가장 비슷한 설정을 찾는다.
+- Stage 1에서 앰프/드라이브/캐비넷/EQ의 큰 틀을, Stage 2에서 모듈레이션/딜레이/리버브를 미세 조정.
+
+## 6. 주의사항
+
+- 학습 중에는 FX150에 **앰프·스피커·헤드셋을 연결해 두지 마세요.** 탐색 과정에서 가끔
+  크고 째지는 금속음이 날 수 있어 장비에 무리가 갈 수 있습니다.
+- 학습 중에는 그 컴퓨터로 **소리 나는 작업을 하지 마세요.** 컴퓨터→FX150로 보내는 소리에
+  잡음이 섞이면 학습이 망가집니다.
+- **Tap Tempo(딜레이 시간)와 모듈레이션 세부는 자동 학습하지 않습니다** — 필요하면 직접 손보세요.
+- 학습 전 FLAMMA 공식 에디터는 닫아 주세요(USB 제어 충돌 방지).
+
+## 7. 솔직한 한계
+
+- Demucs는 일렉기타 전용 분리가 완벽하지 않아(다른 악기·믹스가 섞임) 목표 톤이 조금 오염됩니다.
+- 유튜브 기타의 기타/캐비넷/마이크/믹스가 내 장비와 달라 **완벽 일치가 아니라 "근사"** 입니다.
+- loss는 어디까지나 프록시(대리 지표)입니다. 최종 판단은 **결과 톤을 귀로 들어** 하세요.
+- 하드웨어를 실제로 거쳐 평가하므로 평가 횟수가 제한됩니다(수십~수백 회).
+
+---
 
 ## 다른 PC로 이전 / 새 PC 셋업
-1. **폴더 통째 복사가 제일 안전** — `auto_guitar_tone` 폴더 전체(USB/클라우드).
-   `.git`(이력)·코드·work/(DI녹음·타겟·결과)·매뉴얼 PDF 다 따라감.
-   - git만 옮길 경우: 핵심 산출물(work/my_di*.wav, target_guitar.wav, result.txt,
-     best_reamp.wav)은 강제 추적 중이라 같이 감. 단 매뉴얼 PDF는 gitignore(별도 복사).
-2. 의존성: `pip install -r requirements.txt` (Python 3.13 환경 기준).
-3. **장치 인덱스는 PC마다 다름** — `python src/devices.py`로 FX150 확인,
-   출력목록서 라인아웃 인덱스 찾아 `--play-device N` 갱신(현재 PC는 7).
-   FX150 캡처는 reamp가 MME 자동검출. 실행 전 `python src/preflight.py ...`로 점검.
-4. 환경 주의(이미 코드 반영): Anaconda는 KMP_DUPLICATE_LIB_OK 자동설정,
-   Demucs는 CLI 대신 파이썬 API 사용(torchcodec 불필요).
-5. 하드웨어: 케이블(3.5→6.35) PC출력→FX150 input, USB OUTPUT은 리앰프 시 effected.
-6. (선택) Claude 메모리 이어가려면 `~/.claude/projects/.../memory/` 폴더도 복사.
-7. 찾은 톤은 `work/result.txt`, 실행은 `run.ps1`.
 
-## 목표
+1. **폴더 통째 복사가 제일 안전** — `auto_guitar_tone` 폴더 전체.
+   `.git`(이력)·코드·`work/`(DI/타겟/결과) 다 따라갑니다. (매뉴얼 PDF는 gitignore — 별도 복사)
+2. 의존성: `pip install -r requirements.txt`
+3. **오디오 장치 인덱스는 PC마다 다릅니다.** GUI는 기본적으로 자동 탐지(`play=-1`)하지만,
+   고정하려면 `python src/devices.py`로 라인아웃 인덱스를 확인해 지정하세요.
+4. (선택) Claude 메모리를 이어가려면 `~/.claude/projects/.../memory/` 폴더도 복사.
 
-`유튜브 URL` + `내 기타 DI 녹음` → `내 DI를 유튜브 톤에 가깝게 만드는 FX150 설정값`
+## 고급 / CLI 실행
 
-## 동작 구조 (목표)
+GUI 없이 직접 실행하거나 옵션을 세밀히 주고 싶을 때:
 
-```
-[1] 타겟 확보            [2] 리앰프 루프              [3] 비교         [4] 최적화
-유튜브 오디오            후보 설정 → FX150 적용        목표 vs 결과     Bayesian opt
-yt-dlp 다운로드          DI 재생 → FX150 → 녹음        perceptual      (Optuna)가
-Demucs 기타 분리   ──→   = 처리된 오디오         ──→   loss 계산   ──→ 다음 후보 제안
-                         ▲──────────── 루프 반복 ──────────────────────────┘
-                                                              → 최종 FX150 설정값
+```bash
+# 타겟 확보
+python src/fetch_separate.py <URL> <start> <dur> --song <곡>
+# DI 녹음
+python src/di_record.py work/songs/<곡>/di.wav 15
+# 학습
+python src/main.py --song <곡> --trials 100 --stage2-trials 50 --play-gain 0.4
 ```
 
-## 하드웨어 조사 결과 (2026-06-16)
+- `run.ps1` — preflight→학습 자동 실행 런처(진행상황 실시간, 창 유지).
+  예: `./run.ps1 -trials 80 -stage2trials 0`
+- `python src/main.py --mock --trials 30` — 하드웨어 없이 글루/저장 경로만 점검.
+- `python src/preflight.py --di ... --target ... --play-device N` — DI/타겟/캡처/출력/HID 5종 사전 점검.
 
-- 장비: FLAMMA FX150, SW: `C:\Program Files (x86)\FLAMMA\FX150`
-- USB: `VID_34DB & PID_8004`, USB Composite Device (MI_00 = MEDIA 제어 인터페이스)
-- 통신: SW가 **libusb 독자 프로토콜**로 장비 제어 (`libusb_bulk_transfer` 등)
-- 프리셋: 고정 바이너리 구조체 `PresetPara_TypeDef`, import/export 지원, `:/preset/preset.xml`
-- **USB MIDI 포트 없음** → MIDI 제어 경로 불가
-- USB 오디오 양방향:
-  - 캡처: `마이크 배열(FX150)` (이펙트 처리된 기타음 녹음)
-  - 재생: `스피커(FX150)`
+---
 
-## 제어 레이어 (최대 난관) — HID로 판명
+## 기술 메모 (FX150 리버스 엔지니어링)
 
-장치는 USB 컴포지트:
-- MI_00 = MEDIA (USB 오디오 in/out)
-- MI_03 = **HIDClass** → 제어 채널. usage_page=0x0001, product 'FX150'
+이 프로젝트의 핵심 난관은 FX150을 프로그램으로 제어하는 것이었습니다. 공식 SW는
+libusb 독자 프로토콜을 쓰지만, 장치는 USB 컴포지트로 **HID 제어 인터페이스(MI_03)** 를
+노출하고 있어 `hidapi`로 드라이버 교체 없이 read/write가 가능했습니다.
 
-MIDI(USB) 불가지만 **HID 경로 확보**. libusb 벤더 프로토콜보다 쉬움 (드라이버 교체 불필요).
-`hidapi`로 read/write 가능. 남은 일 = 에디터가 노브 변경 시 보내는 HID 리포트 디코딩:
-1. Wireshark + USBPcap로 에디터의 HID 출력 리포트 캡처 (PC→장치 write는 수동 hidapi로 관찰 불가)
-2. 리포트 구조 디코딩 (`PresetPara_TypeDef` 매핑)
-3. hidapi로 재현 → 파라미터 프로그램 제어
+**프레임 구조** (USBPcap로 에디터 트래픽을 캡처해 역분석):
 
-대안: 물리 노브를 돌려 device→host 입력 리포트를 hidapi로 관찰 (포맷이 대칭이면 단서).
+```
+AA 55 | len16(LE)=len(cmd+payload) | cmd16(LE) | payload | crc16(BE)
+```
+- HID 리포트(64B): `byte0=프레임길이 | 프레임 | 0패딩`, write 시 report_id 0 prefix.
+- CRC16: `crc=0; for b: crc^=b<<8; 8x{ crc=(crc&0x8000)?((crc<<1)^0x1021):(crc<<1) }; crc^=0xFFFF`
+  (poly=0x1021, init=0, **결과는 빅엔디안 저장**).
+- 파라미터 payload는 **빅엔디안 16비트** (`[enable][model][param1][param2]...`).
 
-## 리앰프 경로 (Phase 1 결과)
+**체인 ↔ HID 명령 맵**:
 
-USB 재생(스피커 FX150) → 캡처(마이크 FX150)로 신호 안 돌아옴 → **USB 재생은 이펙트 우회.**
-=> 리앰프는 아날로그: PC 아날로그 출력 → FX150 입력잭 → 이펙트 → USB 캡처.
-녹음 절반(USB 캡처)은 확보, 입력 절반(아날로그 출력)만 케이블링 필요.
+| cmd | 모듈 | 파라미터 |
+|---|---|---|
+| 0x82 | 시그널 체인 슬롯 선택 | (화면 이동) |
+| 0x91 | FX(컴프) | THRESHOLD, RATIO, ATTACK, LEVEL |
+| 0x92 | OD(드라이브) | GAIN, TONE, VOLUME |
+| 0x93 | AMP | GAIN, BASS, MIDDLE, TREBLE, PRESENCE, MASTER |
+| 0x94 | CAB | TUBE, LOW CUT, HI CUT, SPACE, LEVEL |
+| 0x96 | NS(노이즈게이트) | THRESHOLD |
+| 0x97 | EQ | 6밴드 + LEVEL |
+| 0x98 | MOD | RATE, DEPTH, TONE, LEVEL |
+| 0x99 | DELAY | TIME, F.BACK, SUB-D, LEVEL |
+| 0x9a | REVERB | PRE DELAY, DECAY, TONE, LEVEL |
 
-정밀 재검증(reamp_probe.py, 2026-06-16): 초기 routing_test는 재생/캡처를 별도 스트림으로
-열어 캡처가 0으로 죽고 SR(48k/44.1k)도 불일치한 결함이 있었음. 단일 풀듀플렉스(sd.playrec,
-SR일치) + 1kHz 톤 FFT 검출 + clean 앰프 프리셋 활성 상태로 재측정 → 톤 비율 0.0029(무음)
-vs 0.0035(재생), 사실상 무변화. USB 재생이 DSP 우회함을 깨끗이 확정. 케이블 불가피.
+- 파라미터 맵은 공식 exe의 zlib 리소스에서 `preset.xml`을 추출해 확보(`src/extract_qrc.py`).
+- **프리셋 저장(SAVE)**: 파라미터를 2-pass로 푸시한 뒤 cmd `0x6ea8`로 버퍼+이름을 슬롯에 커밋.
+- 모듈 간 전송 간격이 너무 짧으면 모델 로드가 드롭됩니다(코드에서 지연 보정).
+- **리앰프는 아날로그 케이블 필수**: USB 재생(PC→FX150)은 모니터링 전용으로 DSP를 우회하므로,
+  처리된 소리를 얻으려면 PC 라인아웃 → FX150 input 잭으로 신호를 넣어야 합니다.
 
-## 단계별 계획 (검증 기준 포함)
+### 주요 소스 파일
 
-- [x] Phase 0: 환경/장비 탐지 → 검증: FX150 오디오 in/out 인덱스 자동 검출 (devices.py)
-- [x] Phase 1: 리앰프 경로 테스트 → USB 재생 이펙트 우회 확인, 아날로그 리앰프 필요 (routing_test.py)
-- [x] Phase 1b: 제어 채널 식별 → HID(MI_03) 확인 (usb_probe.py, hid_probe.py)
-- [x] Phase 2: HID 프로토콜 역분석 — 완료
-  - [x] 프레임 구조 해독: `aa55 <len16 LE> <cmd16 LE> <payload> <crc16 BE>`
-  - [x] CRC16 역추정: poly=0x1021 init=0 refin=F refout=F xorout=0xFFFF, 대상=aa55이후, BE 저장 (crc_crack.py)
-  - [x] 인코더/디코더 + 캡처 3종 자기검증 통과 (fx150_protocol.py)
-  - [x] 실제 전송 검증: cycle82 전송 시 FX150 화면이 모듈 슬롯 이동 → write 반영 확인
-  - [x] 파라미터 맵 확보: exe의 zlib 리소스에서 preset.xml 추출 (extract_qrc.py → spec/preset.xml)
-  - [x] 스펙 파서 + cmd↔체인 매핑 (fx150_spec.py). 0x93=AMP 6파라미터 캡처 일치로 검증
-  - [x] **라이브 풀 검증 (2026-06-16)**: 0x93 전송 → AMP 모델 변경 + GAIN 정확 반영.
-        enable/model선택/파라미터쓰기 + 끝 0x00 트림 휴리스틱 모두 실장비 확인.
-        **빈 프리셋에 7모듈 풀 톤(BRIT PLEXI LEAD) 빌드 성공** — 빈 프리셋도 model 로드 됨.
-        단 **모듈 간 간격 필수**: 연사(0.6s×6모듈)는 모델 로드 드롭, 1.0s 간격은 성공.
-        → apply_candidate에 delay(기본 0.5s) 추가. main --apply-delay로 조절.
-        장치는 물리노브 조작 시 host로 입력리포트 안 보냄(이전 추정 정정, hidapi read 0건).
-- [x] Phase 3: 유튜브 다운로드 + Demucs 분리 (fetch_separate.py) — 실URL 검증 완료 (35s Short → other stem 20s 추출). Demucs 파이썬 API 사용(CLI 저장은 torchcodec 의존으로 깨짐), KMP_DUPLICATE_LIB_OK로 Anaconda OpenMP 충돌 회피
-- [x] Phase 4: perceptual loss (tone_loss.py) — 합성신호 검증: 동일0/음색차<밝기차<왜곡차 순서 정확
-- [x] Phase 6: Optuna TPE 최적화 루프 (optimizer.py) — mock 평가자로 수렴 검증
-- [x] 후보→장비 인코더 (apply_preset.py) — 캡처 AMP/FX 프레임 정확 재구성, 사람이 읽는 출력
-- [x] 엔드투엔드 글루 (main.py)
-- [x] DI 녹음 도구 (di_record.py) — FX150 캡처서 클린 기타 녹음, 스모크 테스트 통과
-- [x] USB 리앰프 가능성 정밀 검증 (reamp_probe.py) — 단일 풀듀플렉스+톤검출, 불가 확정
-- [x] Phase 5: 아날로그 리앰프 평가자 (reamp.py) — **실측 완료 (2026-06-17)**.
-      케이블(3.5→6.35) PC출력→FX150 input. 독립 Stream + MME 캡처로 풀듀플렉스.
-      24회 본런서 loss 20→7.9 수렴 확인. DI→FX150→캡처→tone_distance→Optuna→HID
-      엔드투엔드 실하드웨어 작동. play_gain 0.25로 고게인 앰프 클리핑 회피.
-      주의: USB OUTPUT은 리앰프 시 반드시 effected (dry면 무음 캡처→loss 평탄).
-
-## 사용법 (실행 전 준비)
-FX150 기타 입력잭은 1개 — 기타(DI 녹음)와 케이블(리앰프)을 시간차로 번갈아 꽂는다.
-
-**A단계: DI 녹음 (기타 사용, 1회)**
-1. 기타를 FX150 기타 입력잭에 꽂기
-2. FX150 USB OUTPUT = **"드라이(dry)"** 설정 (생기타 녹음)
-3. `python di_record.py my_di.wav 15` → 클린 연주 15초 녹음
-
-**B단계: 타겟 확보**
-4. `python fetch_separate.py URL [start] [dur]` → work/target_guitar.wav (첫 실행 Demucs 모델 다운로드)
-
-**C단계: 자동 리앰프 루프 (기타 빼고 케이블)**
-5. 기타 빼고, 케이블: PC 라인아웃 → FX150 기타 입력잭
-6. FX150 USB OUTPUT = **"이펙팅(effected)"** 설정 (매뉴얼 43p). 드라이면 처리음 안 잡힘.
-   PC 출력 볼륨 낮게(클리핑/임피던스 방지).
-   - 프리셋은 빈 것/일반 것 아무거나 OK (빈 프리셋에도 model 로드 됨, 라이브 검증).
-7. `python devices.py`로 라인아웃 장치 인덱스 확인 / FLAMMA 에디터 닫기(HID 충돌 방지)
-   - **장치 인덱스는 USB 연결 상태에 따라 바뀜** — 케이블 꽂은 상태에서 확인할 것.
-   - 사전점검: `python preflight.py --di my_di.wav --target work/target_guitar.wav --play-device N`
-     → DI/타겟/캡처/출력장치/HID 5종 수초 검증. 전부 OK 후 8단계.
-8. `python main.py --di my_di.wav --target work/target_guitar.wav --play-device N`
-   - **Stage 1**: OD/AMP/CAB/EQ 최적화 (기본 100회)
-   - **Stage 2**: MOD/DELAY/REVERB 추가 최적화 (기본 50회, `--stage2-trials 0`으로 건너뜀)
-   - DI는 RMS 최대 4초 구간 자동 선택 (`--trim-di 0`으로 전체 사용)
-   - 결과는 **work/results/<타임스탬프>/result.txt** + 최신 복사 **work/result.txt**
-   - FX150 입력 클리핑 시 `--play-gain 0.25` 등으로 재생 레벨 낮춤.
-9. 최적화 후 파라미터 중요도 분석 자동 출력 (어떤 노브가 톤에 가장 영향을 주는지)
-10. 출력된 설정이 장비에 적용됨 → 마음에 들면 FX150에서 수동 저장
-
-하드웨어 없이 글루 점검: `python main.py --mock --trials 30` (장비 미적용, 로그/저장 경로만 확인).
-
-간편 실행: `run.ps1` (우클릭 → PowerShell에서 실행). preflight→main 자동, 진행상황 실시간 표시, 창 유지.
-기본 인자 = work/my_di4.wav, play-device 7, gain 0.25, 100회+50회(Stage2). `./run.ps1 -trials 80 -stage2trials 0`으로 변경.
-
-참고: USB 플레이백(PC→FX150)은 MIX 모니터링 전용으로 이펙트 우회(매뉴얼 44p, reamp_probe.py 확정) → 디지털 리앰프 불가, C단계 케이블 필수.
-
-## 남은 실측/튜닝 (하드웨어 연결 후)
-- ~~reamp.py 경로 실측~~ 완료 (Phase 5, 2026-06-17)
-- ~~단계형 최적화(거친 모델탐색→미세 노브) 도입~~ 완료(optimizer.staged_optimize). mock 벤치 flat 74→staged 59.
-- ~~apply_preset 끝 0x00 트림 휴리스틱 검증~~ 라이브 확인됨 (AMP GAIN=25 정확 반영)
-- ~~최적화 시작 전 일반 프리셋 로드 자동화~~ 불필요 확인: 빈 프리셋에도 model 로드 됨 (라이브 검증)
-- loss 가중치 튜닝 — 실제 기타 톤쌍으로 W 딕셔너리(tone_loss.py) 재조정. spectral contrast 피처 추가됨.
-- n_coarse/n_fine 비율 튜닝 — 실톤쌍 기반 최적 비율 탐색 잔여 (현재 1:2)
-- payload 파라미터 스케일링(역방향 범위 HI CUT 등) 실측 보정 — 수식은 맞으나 장비 반영 여부 재확인 권장
-
-### 체인 ↔ HID cmd 맵 (Phase 2 산출물)
-0x82 = 시그널 체인 슬롯 선택(화면 이동). 0x91~0x9a = 각 체인 모듈 파라미터:
-| cmd | 체인 | 모델 | 기본 파라미터 |
-|---|---|---|---|
-| 0x91 | FX | 8 | THRESHOLD, RATIO, ATTACK, LEVEL |
-| 0x92 | OD | 22 | GAIN, TONE, VOLUME |
-| 0x93 | AMP | 58 | GAIN, BASS, MIDDLE, TREBLE, PRESENCE, MASTER |
-| 0x94 | CAB | 80 | TUBE, LOW CUT, HI CUT, SPACE, LEVEL |
-| 0x95 | FXLOOP | 2 | SEND/RETURN LEVEL |
-| 0x96 | NS | 3 | THRESHOLD |
-| 0x97 | EQ | 4 | 6밴드 + LEVEL |
-| 0x98 | MOD | 20 | RATE, DEPTH, TONE, LEVEL |
-| 0x99 | DELAY | 9 | TIME, F.BACK, SUB-D, LEVEL |
-| 0x9a | REVERB | 7 | PRE DELAY, DECAY, TONE, LEVEL |
-
-payload 구조(추정, 검증중): `[enable LE16][model LE16][param1 LE16][param2 LE16]...`
-- type="0" 연속값 `min_max_step_decimals_unit`, type="1" 열거형 `OPT_OPT_...`(값=인덱스)
-
-### HID 프로토콜 (역분석 결과)
-- 프레임: `AA 55 | len16(LE)=len(cmd+payload) | cmd16(LE) | payload | crc16(BE)`
-- HID 리포트(64B): `byte0=프레임길이 | 프레임 | 0패딩`, write 시 report_id 0 prefix
-- CRC: `crc=0; for b: crc^=b<<8; 8x{ crc = (crc&0x8000)?((crc<<1)^0x1021):(crc<<1) }; crc^=0xFFFF`
-- 관측된 cmd: 0x91~0x9a, 0x82(블록/씬?), 0xa3/0xa4/0xa6/0xbb 등. 노브 sweep은 0x92/0x93에서 확인.
-- 장치는 노브 조작 시 host로 입력 리포트를 보냄(상태 동기화) → 디코드로 현재값 읽기 가능.
-- [ ] Phase 3: 유튜브 다운로드 + Demucs 분리 → 검증: 기타 stem wav 생성
-- [ ] Phase 4: perceptual loss → 검증: 알려진 쌍에서 거리값 합리적
-- [ ] Phase 5: 리앰프 캡처 자동화 → 검증: DI 재생→처리음 녹음 반복 동작
-- [ ] Phase 6: Bayesian 최적화 루프 → 검증: 반복 시 loss 감소
-
-## 솔직한 한계
-
-- Demucs는 일렉기타 전용 stem 없음 → "other"에 섞임, 타겟 오염
-- 유튜브 기타의 기타/캐비넷/마이크/믹스가 내 것과 달라 완벽 일치 불가 → 톤 색깔 근사
-- 하드웨어 실시간 렌더 → 평가 횟수 제한 (수십~수백)
-- 제어 레이어(USB RE)가 막히면 자동 루프 불가, 수동 보조로 격하
+| 파일 | 역할 |
+|---|---|
+| `src/gui.py` | 메인 GUI |
+| `src/main.py` | 엔드투엔드 학습 글루 |
+| `src/fetch_separate.py` | 유튜브 다운로드 + Demucs 기타 분리 |
+| `src/di_record.py` | DI(생기타) 녹음 (play-along 지원) |
+| `src/reamp.py` | DI 재생→FX150→캡처 평가자 |
+| `src/optimizer.py` | Optuna 최적화 루프 (resume 지원) |
+| `src/tone_loss.py` | perceptual loss + 리프 체크(riff_match) |
+| `src/fx150_protocol.py` / `fx150_spec.py` | HID 프레임 인코딩/디코딩 + 파라미터 스펙 |
+| `src/apply_preset.py` / `fx150_send.py` | 후보 설정 → 장치 전송 / 프리셋 저장 |

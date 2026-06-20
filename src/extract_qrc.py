@@ -3,17 +3,21 @@
 Qt rcc는 리소스를 qCompress(zlib) 형식으로 저장: [4B BE 원본길이][zlib stream].
 zlib 헤더(0x78 ...)를 전수 탐색해 해제, XML/텍스트로 보이면 저장.
 """
-import zlib
+import os
 import re
+import sys
+import zlib
 
-EXE = r"C:\Program Files (x86)\FLAMMA\FX150\FX150.exe"
-OUT_DIR = r"C:\Users\USER\Desktop\auto_guitar_tone\extracted"
+# FX150 공식 SW 기본 설치 경로. 다르면 첫 인자로 exe 경로를 넘기세요.
+DEFAULT_EXE = r"C:\Program Files (x86)\FLAMMA\FX150\FX150.exe"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT_DIR = os.path.join(ROOT, "extracted")
 
 
 def main():
-    import os
+    exe = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_EXE
     os.makedirs(OUT_DIR, exist_ok=True)
-    data = open(EXE, "rb").read()
+    data = open(exe, "rb").read()
     print(f"exe {len(data)} bytes")
 
     hits = 0
@@ -36,7 +40,7 @@ def main():
                     is_xmlish = any(t in out[:2000] for t in
                                     (b"<?xml", b"<preset", b"<param", b"<module",
                                      b"<effect", b"<list", b"name=", b"<root", b"<FX"))
-                    fn = f"{OUT_DIR}\\stream_{start:08x}{'_xml' if is_xmlish else ''}.txt"
+                    fn = os.path.join(OUT_DIR, f"stream_{start:08x}{'_xml' if is_xmlish else ''}.txt")
                     open(fn, "wb").write(out)
                     saved += 1
                     flag = " [XML?]" if is_xmlish else ""

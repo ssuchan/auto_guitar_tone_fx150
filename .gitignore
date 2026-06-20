@@ -11,6 +11,13 @@ work/
 # 대용량 reference (장비 매뉴얼 등)
 *.pdf
 
+# FLAMMA 공식 SW에서 추출한 리소스 (재배포 안 함 — 사용자가 직접 생성)
+extracted/
+spec/preset.xml
+
+# Claude Code 로컬 설정 (개인 경로/권한 포함)
+.claude/
+
 # OS
 Thumbs.db
 .DS_Store
