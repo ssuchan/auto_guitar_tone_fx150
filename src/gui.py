@@ -216,13 +216,14 @@ class App:
         win.rowconfigure(1, weight=1)
 
         ttk.Label(win, text="곡").grid(row=0, column=0, sticky="w", padx=6, pady=(6, 0))
-        ttk.Label(win, text="학습 프리셋 (loss 낮을수록 타겟에 가까움)").grid(
+        ttk.Label(win, text="학습 프리셋 (loss 낮을수록 좋음 · 삭제는 여러 개 선택 가능)").grid(
             row=0, column=1, sticky="w", padx=6, pady=(6, 0))
         song_lb = tk.Listbox(win, exportselection=False, width=18)
         song_lb.grid(row=1, column=0, sticky="ns", padx=6, pady=4)
         for s in songs:
             song_lb.insert("end", s)
-        preset_lb = tk.Listbox(win, exportselection=False, font=("Consolas", 9))
+        preset_lb = tk.Listbox(win, exportselection=False, selectmode="extended",
+                               font=("Consolas", 9))
         preset_lb.grid(row=1, column=1, sticky="nsew", padx=6, pady=4)
         state = {"presets": []}
 
@@ -239,10 +240,27 @@ class App:
 
         def selected():
             ps, sel = state["presets"], preset_lb.curselection()
-            if not ps or not sel or sel[0] >= len(ps):
-                messagebox.showinfo("선택", "프리셋을 먼저 고르세요.")
+            if not ps or len(sel) != 1 or sel[0] >= len(ps):
+                messagebox.showinfo("선택", "프리셋을 하나만 고르세요.")
                 return None, None
             return songs[song_lb.curselection()[0]], ps[sel[0]]
+
+        def do_delete():
+            ps, sel = state["presets"], preset_lb.curselection()
+            targets = [ps[i] for i in sel if i < len(ps)]
+            if not targets:
+                messagebox.showinfo("선택", "삭제할 프리셋을 고르세요.")
+                return
+            if not messagebox.askyesno(
+                    "삭제 확인", f"{len(targets)}개 프리셋을 삭제할까요? (되돌릴 수 없음)"):
+                return
+            import shutil
+            for it in targets:
+                try:                              # results/<ts>/ 통째 삭제
+                    shutil.rmtree(os.path.dirname(it["path"]))
+                except OSError as e:
+                    messagebox.showerror("삭제 실패", f"{it['path']}\n{e}")
+            on_song()                             # 목록 새로고침
 
         def do_apply():
             song, it = selected()
@@ -279,7 +297,8 @@ class App:
         ttk.Button(btns, text="FX150에 적용", command=do_apply).grid(row=0, column=0, padx=4)
         ttk.Button(btns, text="이 프리셋부터 이어서 개선", command=do_resume).grid(
             row=0, column=1, padx=4)
-        ttk.Button(btns, text="닫기", command=win.destroy).grid(row=0, column=2, padx=4)
+        ttk.Button(btns, text="삭제", command=do_delete).grid(row=0, column=2, padx=4)
+        ttk.Button(btns, text="닫기", command=win.destroy).grid(row=0, column=3, padx=4)
 
     def _on_close(self):
         self._save_state()
