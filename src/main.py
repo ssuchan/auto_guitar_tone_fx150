@@ -9,7 +9,8 @@
 
 2단계 흐름:
   Stage 1: OD/AMP/CAB/EQ 최적화 (MOD/DELAY/REVERB bypass 고정)
-  Stage 2: Stage 1 결과 고정 + MOD/DELAY/REVERB 추가 최적화 (--stage2-trials로 제어)
+  Stage 2: Stage 1 결과 고정 + DELAY/REVERB 추가 최적화 (--stage2-trials로 제어)
+           (MOD는 자동 탐색 제외 — 시변 효과라 loss로 판단 어려움, 수동 권장)
 """
 import os
 import json
@@ -78,7 +79,7 @@ STAGE2_CHAINS = {"DELAY", "REVERB"}
 
 
 def _make_stage2_config(best1):
-    """Stage 1 결과를 frozen으로 고정, MOD/DELAY/REVERB만 새로 탐색."""
+    """Stage 1 결과를 frozen으로 고정, STAGE2_CHAINS(DELAY/REVERB)만 새로 탐색."""
     cfg = {}
     for chain, m in best1.items():
         if chain in STAGE2_CHAINS:
@@ -166,7 +167,7 @@ def main():
     ap.add_argument("--trials", type=int, default=100,
                     help="Stage 1 optimization trials (default 100)")
     ap.add_argument("--stage2-trials", type=int, default=50,
-                    help="Stage 2 MOD/DELAY/REVERB trials. 0=skip (default 50)")
+                    help="Stage 2 DELAY/REVERB trials. 0=skip (default 50)")
     ap.add_argument("--play-gain", type=float, default=0.4,
                     help="DI playback gain into FX150. 캡처 클리핑 나면 낮춰라. DI는 "
                          "정규화되니 0.4로 대부분 OK. --calibrate로 자동보정 가능 (default 0.4)")
@@ -340,14 +341,14 @@ def main():
         final_loss = study1.best_value
         final_study = study1
 
-        # ── Stage 2: MOD / DELAY / REVERB (resume이면 전 체인 포함이라 생략) ───
+        # ── Stage 2: DELAY / REVERB (resume이면 전 체인 포함이라 생략) ───
         run_stage2 = args.stage2_trials > 0 and not args.mock and not prev_best
         if run_stage2:
             ev.reset_tracking()   # prev 초기화 → Stage 2 첫 trial이 전 체인 정합 전송
             cfg2 = _make_stage2_config(best1)
             n_coarse2 = max(1, args.stage2_trials // 3)
             print(f"\n{'─'*50}")
-            print(f"[Stage 2] MOD/DELAY/REVERB optimization  {args.stage2_trials} trials")
+            print(f"[Stage 2] DELAY/REVERB optimization  {args.stage2_trials} trials")
             print(f"{'─'*50}")
             # Stage 2는 풀 DI(시간계 이펙트 DELAY/REVERB 꼬리가 짧은 DI에 안 담김).
             study2, best2 = staged_optimize(ev, cfg2,
@@ -360,7 +361,7 @@ def main():
             print_importance(study2)
 
             results.append({
-                "label": "Stage 2 (+ MOD/DELAY/REVERB)",
+                "label": "Stage 2 (+ DELAY/REVERB)",
                 "best": best2,
                 "loss": study2.best_value,
                 "study": study2,

@@ -7,7 +7,7 @@ param(
     [int]   $play         = -1,     # -1=자동탐지(Realtek MME 라인아웃). 고정하려면 인덱스 지정
     [double]$gain         = 0.25,
     [int]   $trials       = 100,    # Stage 1 횟수
-    [int]   $stage2trials = 50,     # Stage 2 (MOD/DELAY/REVERB) 횟수. 0=건너뜀
+    [int]   $stage2trials = 50,     # Stage 2 (DELAY/REVERB) 횟수. 0=건너뜀
     [double]$paramdelay   = 0.1,    # Stage B 파라미터 전송 간격 (모델 고정 시 단축)
     [double]$trimdi       = 4.0     # DI 자동 트림 길이(초). 0=전체 사용
 )
