@@ -91,6 +91,7 @@ class App:
         # 곡이 바뀌면 '이어개선 대상' 표시 갱신 + 시작 시 1회.
         self.v["song"].trace_add("write", lambda *a: self._refresh_resume_label())
         self._refresh_resume_label()
+        self._update_spec_status()                            # 하단 스펙 상태줄
         root.protocol("WM_DELETE_WINDOW", self._on_close)     # 닫을 때 저장
         self.root.after(100, self._drain)
         self.root.after(400, self._check_spec)                # 스펙 없으면 추출 제안
@@ -145,6 +146,15 @@ class App:
         """시작 시 스펙 없으면 추출 제안."""
         if not os.path.exists(self._spec_path()):
             self._prompt_extract_spec()
+
+    def _update_spec_status(self):
+        """하단 상태줄에 스펙 유무 표시(있음=초록/없음=빨강)."""
+        if os.path.exists(self._spec_path()):
+            self.spec_status.set("FX150 스펙: ✓ 있음 (spec/preset.xml)")
+            self.spec_lbl.config(foreground="#2a7a3a")
+        else:
+            self.spec_status.set("FX150 스펙: ✗ 없음 — 학습 전 [스펙 추출] 필요")
+            self.spec_lbl.config(foreground="#c0392b")
 
     def _prompt_extract_spec(self):
         if messagebox.askyesno(
@@ -441,6 +451,15 @@ class App:
         self.log.grid(row=11, column=0, columnspan=4, sticky="nsew", pady=(4, 0))
         frm.rowconfigure(11, weight=1)
 
+        # 하단 상태줄: FX150 파라미터 스펙(spec/preset.xml) 유무 + 추출 버튼(항상 보임).
+        self.spec_status = tk.StringVar()
+        status = ttk.Frame(frm)
+        status.grid(row=12, column=0, columnspan=4, sticky="we", pady=(4, 0))
+        self.spec_lbl = ttk.Label(status, textvariable=self.spec_status)
+        self.spec_lbl.grid(row=0, column=0, sticky="w")
+        ttk.Button(status, text="스펙 추출", command=self._extract_spec, width=10).grid(
+            row=0, column=1, padx=8)
+
     def _append(self, text):
         self.log.config(state="normal")
         self.log.insert("end", text)
@@ -642,6 +661,7 @@ class App:
                     else:
                         self._append("\n🎉 완료!\n" if payload else "\n실패/중단됨.\n")
                     self._refresh_resume_label()    # 학습으로 best_candidate.json 갱신됐을 수 있음
+                    self._update_spec_status()      # 스펙 추출이 끝났으면 상태 반영
         except queue.Empty:
             pass
         self.root.after(100, self._drain)
