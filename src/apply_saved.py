@@ -47,12 +47,28 @@ def load_candidate(path):
     return best[1]
 
 
+def _override(cand, chain, spec):
+    """chain(DELAY/REVERB)을 spec으로 덮어씀. spec='off'면 bypass, 아니면
+    'model,p0,p1,...'(콤마구분 정수). target_fx 분석값을 A/B로 걸 때 사용."""
+    if spec is None:
+        return
+    if spec.lower() == "off":
+        cand[chain] = {"enable": 0, "model": 1, "params": [0, 0, 0, 0]}
+    else:
+        v = [int(x) for x in spec.split(",")]
+        cand[chain] = {"enable": 1, "model": v[0], "params": v[1:]}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="result.txt 또는 best_candidate.json 경로")
     ap.add_argument("--save-name", default=None, help="채우면 적용 후 슬롯에 영구저장(≤11 ASCII)")
     ap.add_argument("--save-slot", default=None, help="슬롯 (예 38B / 112). 비우면 기본 슬롯")
     ap.add_argument("--apply-delay", type=float, default=0.15)
+    ap.add_argument("--delay", default=None,
+                    help="DELAY 덮어쓰기: 'model,time_raw,fback,subd,level' 또는 'off'")
+    ap.add_argument("--reverb", default=None,
+                    help="REVERB 덮어쓰기: 'model,pre,decay,tone,level' 또는 'off'")
     args = ap.parse_args()
     try:
         sys.stdout.reconfigure(errors="replace")
@@ -60,6 +76,8 @@ def main():
         pass
 
     cand = load_candidate(args.src)
+    _override(cand, "DELAY", args.delay)      # 딜레이/리버브 A/B 오버라이드(target_fx 분석값)
+    _override(cand, "REVERB", args.reverb)
     print("적용할 톤:\n" + describe(cand) + "\n")
 
     h = open_dev()

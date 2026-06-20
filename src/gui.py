@@ -447,6 +447,9 @@ class App:
                   command=lambda v: self.play_vol_lbl.config(text=f"{float(v):.0f}%")
                   ).grid(row=0, column=5, padx=(6, 0))
         self.play_vol_lbl.grid(row=0, column=6)
+        # 학습 후 딜레이/리버브 분석 → 후보를 FX150에 걸고 귀로 A/B(target_fx).
+        ttk.Button(btns, text="딜레이/리버브", command=self._analyze_fx, width=11).grid(
+            row=0, column=7, padx=(8, 0))
 
         # 게인 레벨 체크박스(복수 선택). 선택한 캐릭터의 AMP 모델만 탐색(전부 해제=전체).
         ttk.Label(frm, text="게인 레벨\n(곡 성격, 복수)").grid(row=9, column=0, sticky="e", padx=4, pady=3)
@@ -670,6 +673,115 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _analyze_fx(self):
+        """타겟에서 딜레이/리버브 분석(target_fx) → 후보로 A/B 오디션 창 열기.
+        손실이 시간계 효과를 못 잡으므로(자동탐색 OFF), 여기서 측정→후보→귀로 선택."""
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("불가", "다른 작업 중에는 할 수 없어요.")
+            return
+        song = self.v["song"].get().strip()
+        if not song:
+            messagebox.showerror("입력 오류", "곡 제목을 입력하세요.")
+            return
+        songdir = os.path.join(ROOT, "work", "songs", song)
+        tgt = os.path.join(songdir, "target.wav")
+        cand = os.path.join(songdir, "best_candidate.json")
+        if not os.path.exists(tgt):
+            messagebox.showerror("타겟 없음", "이 곡의 target.wav가 없어요. 먼저 다운로드하세요.")
+            return
+        if not os.path.exists(cand):
+            messagebox.showerror("톤 없음", "먼저 학습해 best_candidate.json을 만들어야\n"
+                                            "그 톤 위에 딜레이/리버브를 얹어 들어볼 수 있어요.")
+            return
+        self._append("\n[딜레이/리버브] 타겟 분석 중...(분리 포함, 1~3분)\n")
+        cmd = [self.py, "-u", os.path.join(SRC, "target_fx.py"), tgt]
+
+        def work():
+            try:
+                env = dict(os.environ, PYTHONIOENCODING="utf-8")
+                out = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True,
+                                     text=True, encoding="utf-8", errors="replace",
+                                     creationflags=CREATE_NO_WINDOW)
+                s = out.stdout or ""
+                i = s.find("{")
+                if i < 0:
+                    raise ValueError(f"분석 출력 파싱 실패\n{(out.stderr or s)[-400:]}")
+                data, _ = json.JSONDecoder().raw_decode(s[i:])
+                self.q.put(("log", "[딜레이/리버브] 분석 완료 — 오디션 창 열림\n"))
+                self.q.put(("audition", (song, cand, data)))
+            except Exception as e:
+                self.q.put(("log", f"[딜레이/리버브] 실패: {e}\n"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _open_audition(self, song, cand_path, data):
+        """딜레이/리버브 A/B 창. 후보 선택 → [들어보기]로 FX150에 적용(기타로 직접 비교),
+        [이대로 저장]으로 슬롯 커밋. apply_saved.py가 저장 톤 위에 override를 얹어 적용."""
+        delay = data.get("delay")
+        rev = data.get("reverb") or {}
+        win = tk.Toplevel(self.root)
+        win.title(f"딜레이/리버브 A/B — {song}")
+        ttk.Label(win, text=f"템포 {data.get('tempo')} BPM   "
+                            "후보 고르고 [들어보기] → 기타로 치며 '타겟 듣기'와 비교 → [이대로 저장]",
+                  foreground="#444").grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+
+        # 딜레이 후보 (기본=최상위 후보, 없으면 끄기). FX150: DIGITAL(4), F.BACK 38, SUB-D OFF, LEVEL 40.
+        self._au_delay = tk.StringVar(value="off")
+        df = ttk.LabelFrame(win, text="딜레이 (귀로 A/B — 분할 1개 선택)")
+        df.grid(row=1, column=0, sticky="nwe", padx=8, pady=4)
+        ttk.Radiobutton(df, text="끄기", variable=self._au_delay, value="off").grid(sticky="w")
+        if delay and delay.get("candidates"):
+            for k, c in enumerate(delay["candidates"]):
+                arg = f"4,{c['fx150_time_raw']},38,0,40"
+                if k == 0:
+                    self._au_delay.set(arg)
+                ttk.Radiobutton(df, text=f"{c['subdivision']}  {c['ms']}ms",
+                                variable=self._au_delay, value=arg).grid(sticky="w")
+        else:
+            ttk.Label(df, text="(뚜렷한 딜레이 검출 없음)", foreground="#888").grid(sticky="w")
+
+        # 리버브 (시작점. 풀믹스는 과검출 가능 → 귀로 판단)
+        self._au_reverb = tk.StringVar(value="off")
+        rf = ttk.LabelFrame(win, text="리버브 (시작점 — 모델/양 귀로 조정)")
+        rf.grid(row=1, column=1, sticky="nwe", padx=8, pady=4)
+        ttk.Radiobutton(rf, text="끄기", variable=self._au_reverb, value="off").grid(sticky="w")
+        fx = rev.get("fx150")
+        if fx:
+            arg = f"{fx['model']}," + ",".join(str(p) for p in fx["params"])
+            self._au_reverb.set(arg)
+            ttk.Radiobutton(rf, text=f"{fx['name']} ({rev.get('category')})",
+                            variable=self._au_reverb, value=arg).grid(sticky="w")
+
+        bf = ttk.Frame(win)
+        bf.grid(row=2, column=0, columnspan=2, pady=8)
+        ttk.Button(bf, text="들어보기 (FX150 적용)",
+                   command=lambda: self._au_apply(cand_path, save=False)).grid(row=0, column=0, padx=4)
+        ttk.Button(bf, text="타겟 듣기",
+                   command=self._play_target).grid(row=0, column=1, padx=4)
+        ttk.Button(bf, text="이대로 저장",
+                   command=lambda: self._au_apply(cand_path, save=True)).grid(row=0, column=2, padx=4)
+
+    def _au_apply(self, cand_path, save):
+        """선택한 딜레이/리버브를 저장 톤 위에 얹어 FX150 적용(save=True면 슬롯 저장)."""
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("불가", "적용 중이에요. 잠시 후 다시 누르세요.")
+            return
+        cmd = [self.py, "-u", os.path.join(SRC, "apply_saved.py"), cand_path,
+               "--delay", self._au_delay.get(), "--reverb", self._au_reverb.get()]
+        label = "딜레이/리버브 적용"
+        if save:
+            name = self.v["name"].get().strip()
+            slot = self.v["slot"].get().strip()
+            if not name:
+                messagebox.showerror("저장 오류", "저장하려면 '저장 이름'을 입력하세요.")
+                return
+            if not slot:
+                messagebox.showerror("저장 오류", "저장하려면 '슬롯'을 입력하세요(엉뚱한 슬롯 덮어쓰기 방지).")
+                return
+            cmd += ["--save-name", name, "--save-slot", slot]
+            label += "+저장"
+        self._run_cmds([(label, cmd)])
+
     def _stop(self):
         self._stopping = True
         p = self.proc
@@ -731,6 +843,8 @@ class App:
                 kind, payload = self.q.get_nowait()
                 if kind == "log":
                     self._append(payload)
+                elif kind == "audition":
+                    self._open_audition(*payload)
                 elif kind == "done":
                     self.btn.config(state="normal", text="학습하기")
                     self.rec_btn.config(state="normal", text="DI 녹음")
