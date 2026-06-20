@@ -1,13 +1,12 @@
 """auto_guitar_tone GUI — 유튜브 구간 지정 + FX150 톤 학습 실행 + 실시간 로그.
 
 실행:  pythonw src/gui.py   (cmd 창 없이 창으로 뜸)
-"학습하기"를 누르면:
-  ① (유튜브 링크가 있으면) fetch_separate.py 로 지정 구간을 받아 기타 분리 → target
-  ② main.py 로 학습 + FX150 슬롯에 저장
-두 단계의 상세 로그가 아래 로그창에 실시간으로 표시된다.
+워크플로(다운로드와 학습을 분리):
+  ① [다운로드] : 유튜브 링크/구간을 받아 기타 분리 → work/songs/<곡>/target.wav
+  ② [타겟 듣기] / [DI 녹음](타겟 들으며) / [리프 체크]로 준비
+  ③ [학습하기] : main.py 로 학습(+FX150 슬롯 저장). 다운로드는 안 함 — target.wav가 있어야 함.
 
 빈 칸 규칙:
-  - 유튜브 링크 비우면 다운로드 건너뛰고 기존 target(같은 곡 제목)으로 바로 학습.
   - 저장 이름/슬롯 비우면 저장 안 함(적용만). 슬롯 비우면 자동 배정.
 """
 import os
@@ -49,19 +48,9 @@ def parse_time(s):
 GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 
 
-def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
+def build_commands(py, *, song, s1, s2, gain, name, slot,
                    gain_levels=None, calibrate=False, resume=False):
-    """(라벨, argv) 리스트 생성. url 있으면 fetch 먼저, 그 다음 학습."""
-    cmds = []
-    if url:
-        dur = (end - start) if (start is not None and end is not None) else None
-        fetch = [py, "-u", os.path.join(SRC, "fetch_separate.py"), url]
-        if start is not None:
-            fetch.append(str(start))
-        if dur is not None:
-            fetch.append(str(dur))
-        fetch += ["--song", song]
-        cmds.append(("다운로드 + 기타 분리", fetch))
+    """학습 argv 생성. 유튜브 다운로드는 [다운로드] 버튼에서 별도 처리."""
     train = [py, "-u", os.path.join(SRC, "main.py"), "--song", song,
              "--trials", str(s1), "--stage2-trials", str(s2), "--play-gain", str(gain)]
     # main.py가 calibrate 기본 ON이므로, 체크박스 해제를 반영하려면 명시적으로 전달.
@@ -74,8 +63,7 @@ def build_commands(py, *, url, start, end, song, s1, s2, gain, name, slot,
         train += ["--save-slot", slot]
     if gain_levels:
         train += ["--gain-level", ",".join(gain_levels)]
-    cmds.append(("학습", train))
-    return cmds
+    return [("학습", train)]
 
 
 class App:
@@ -376,7 +364,12 @@ class App:
                 row=r, column=1, columnspan=3, sticky="we", padx=4)
             self.v[key] = var
 
-        field(0, "유튜브 링크", "url")
+        ttk.Label(frm, text="유튜브 링크").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        self.v["url"] = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.v["url"], width=40).grid(
+            row=0, column=1, columnspan=2, sticky="we", padx=4)
+        ttk.Button(frm, text="다운로드", command=self._download, width=10).grid(
+            row=0, column=3, sticky="we", padx=4)
 
         ttk.Label(frm, text="구간 (mm:ss)").grid(row=1, column=0, sticky="e", padx=4, pady=3)
         self.v["start"] = tk.StringVar()
@@ -473,7 +466,6 @@ class App:
             self._prompt_extract_spec()
             return
         try:
-            url = self.v["url"].get().strip()
             song = self.v["song"].get().strip()
             if not song:
                 raise ValueError("곡 제목을 입력하세요.")
@@ -484,22 +476,50 @@ class App:
             slot = self.v["slot"].get().strip()
             if name and len(name.encode("ascii", "ignore")) > 11:
                 raise ValueError("저장 이름은 최대 11자(영문/숫자)입니다.")
-            start = parse_time(self.v["start"].get())
-            end = parse_time(self.v["end"].get())
-            if url and start is not None and end is not None and end <= start:
-                raise ValueError("끝 시간이 시작 시간보다 커야 합니다.")
         except ValueError as e:
             messagebox.showerror("입력 오류", str(e))
             return
 
+        target = os.path.join(ROOT, "work", "songs", song, "target.wav")
+        if not os.path.exists(target):          # 학습은 다운로드 안 함 → 타겟이 먼저 있어야
+            messagebox.showerror("타겟 없음",
+                                 "이 곡의 타겟(target.wav)이 없어요.\n"
+                                 "먼저 [다운로드]로 유튜브에서 받아 주세요.")
+            return
+
         levels = ["auto"] if self.auto_gl.get() else \
             [lv for lv, v in self.gain_levels.items() if v.get()]
-        cmds = build_commands(self.py, url=url, start=start, end=end, song=song,
-                              s1=s1, s2=s2, gain=gain, name=name, slot=slot,
-                              gain_levels=levels, calibrate=self.calibrate.get(),
-                              resume=self.resume.get())
+        cmds = build_commands(self.py, song=song, s1=s1, s2=s2, gain=gain,
+                              name=name, slot=slot, gain_levels=levels,
+                              calibrate=self.calibrate.get(), resume=self.resume.get())
         self.btn.config(text="학습 중...")
         self._run_cmds(cmds)
+
+    def _download(self):
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("불가", "다른 작업 중에는 할 수 없어요.")
+            return
+        url = self.v["url"].get().strip()
+        song = self.v["song"].get().strip()
+        if not url:
+            messagebox.showerror("입력 오류", "유튜브 링크를 입력하세요.")
+            return
+        if not song:
+            messagebox.showerror("입력 오류", "곡 제목을 먼저 입력하세요 (타겟 저장 위치).")
+            return
+        start = parse_time(self.v["start"].get())
+        end = parse_time(self.v["end"].get())
+        if start is not None and end is not None and end <= start:
+            messagebox.showerror("입력 오류", "끝 시간이 시작 시간보다 커야 합니다.")
+            return
+        dur = (end - start) if (start is not None and end is not None) else None
+        fetch = [self.py, "-u", os.path.join(SRC, "fetch_separate.py"), url]
+        if start is not None:
+            fetch.append(str(start))
+        if dur is not None:
+            fetch.append(str(dur))
+        fetch += ["--song", song]
+        self._run_cmds([("다운로드 + 기타 분리", fetch)])
 
     def _record(self):
         if self.worker and self.worker.is_alive():
