@@ -123,9 +123,18 @@ def _snap_subdivision(ms, tempo):
     return best if best and best[2] < 0.08 else None    # 8% 이내만 채택
 
 
+# 리버브 크기 → FX150 시작점(모델,DECAY,TONE,LEVEL,PRE DELAY). A/B로 미세조정 전제.
+REVERB_PRESET = {
+    "none":   None,
+    "medium": {"model": 2, "name": "ROOM", "params": [20, 45, 50, 30]},   # PRE,DECAY,TONE,LEVEL
+    "large":  {"model": 3, "name": "HALL", "params": [30, 65, 50, 35]},
+}
+
+
 def _reverb_estimate(s):
-    """리버브 정성 추정: 강한 음 뒤 단조 감쇠율(dB/s)의 중앙값. 가파르면 드라이,
-    완만/없음이면 리버브. (median_slope, n_decays) — slope None이면 꼬리가 안 끊겨 리버브 큼."""
+    """리버브 정성 추정: 강한 음 뒤 단조 감쇠율(dB/s) 중앙값 + 음 사이 지속도.
+    실측(라벨 클립): 드라이 ~-450dB/s·sustain 0.87 vs 리버브 ~-180dB/s·sustain≥0.94.
+    반환 dict(slope, sustain, category). category: none/medium/large."""
     w = int(0.01 * SR); h = int(0.005 * SR)
     e = np.array([np.sqrt(np.mean(s[i:i + w] ** 2) + 1e-12)
                   for i in range(0, len(s) - w, h)])
@@ -141,7 +150,17 @@ def _reverb_estimate(s):
             i = j + 1
         else:
             i += 1
-    return (float(np.median(slopes)) if slopes else None), len(slopes)
+    slope = float(np.median(slopes)) if slopes else None
+    sustain = float(np.mean(edb > -25))
+    # 분류: 가파른 감쇠 = 드라이. 완만/꼬리 안끊김(slope None) = 리버브, 더 완만할수록 큼.
+    if slope is not None and slope < -300:
+        cat = "none"
+    elif slope is None or slope > -200:
+        cat = "large"
+    else:
+        cat = "medium"
+    return {"slope": None if slope is None else round(slope),
+            "sustain": round(sustain, 2), "category": cat}
 
 
 def analyze(path, separate=True):
@@ -182,10 +201,11 @@ def analyze(path, separate=True):
                  "windows": top["n"], "of": n_win, "confidence": conf,
                  "fx150_time_raw": int(np.clip(best_ms - 20, 0, 1980))}
 
-    slope, ndec = _reverb_estimate(g)
-    reverb = {"slope_db_s": None if slope is None else round(slope),
-              "present": slope is None or slope > -250,   # 완만하면 리버브
-              "confidence": "low"}
+    rv = _reverb_estimate(g)
+    preset = REVERB_PRESET[rv["category"]]
+    reverb = {"slope_db_s": rv["slope"], "sustain": rv["sustain"],
+              "category": rv["category"], "present": rv["category"] != "none",
+              "fx150": preset, "confidence": "low"}   # 풀믹스는 demucs 뭉갬으로 과검출 주의
 
     return {"tempo": None if tempo is None else round(tempo, 1),
             "delay": delay, "reverb": reverb}
@@ -209,8 +229,13 @@ def main():
                   f"강도 {c['strength']})")
     else:
         print("\n→ 딜레이: 뚜렷한 검출 없음(bypass 권장)")
-    print(f"→ 리버브: {'있어 보임' if r['reverb']['present'] else '약함/없음'} "
-          f"(slope={r['reverb']['slope_db_s']} dB/s, 정성적)")
+    rv = r["reverb"]
+    if rv["present"]:
+        fx = rv["fx150"]
+        print(f"→ 리버브: {rv['category']} (slope={rv['slope_db_s']} dB/s, sustain={rv['sustain']}) "
+              f"→ 시작점 {fx['name']} {fx['params']} [PRE,DECAY,TONE,LEVEL]  (귀로 A/B 조정)")
+    else:
+        print(f"→ 리버브: 없음/약함 (slope={rv['slope_db_s']} dB/s) → bypass 권장")
 
 
 if __name__ == "__main__":
