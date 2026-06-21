@@ -883,8 +883,8 @@ class App:
 
 def main():
     root = tk.Tk()
-    root.geometry("800x600")
-    root.minsize(760, 560)   # 더 줄이면 입력칸/버튼이 잘려 안 보임 → 최소폭 고정
+    root.geometry("740x600")
+    root.minsize(720, 560)   # 더 줄이면 입력칸/버튼이 잘려 안 보임 → 최소폭 고정
     App(root)
     root.mainloop()
 
