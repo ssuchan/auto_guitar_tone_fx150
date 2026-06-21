@@ -105,7 +105,7 @@ class App:
             var.set(bool(data.get("gain_levels", {}).get(k, False)))
         self.auto_gl.set(bool(data.get("auto_gl", False)))
         self.calibrate.set(bool(data.get("calibrate", False)))
-        self.search_comp.set(bool(data.get("search_comp", True)))
+        self.search_comp.set(bool(data.get("search_comp", False)))
         self.search_mod.set(bool(data.get("search_mod", True)))
 
     def _song_settings_path(self):
@@ -413,13 +413,15 @@ class App:
         ttk.Button(frm, text="이전 프리셋", command=self._open_preset_browser).grid(
             row=2, column=3, sticky="we", padx=4)
         field(3, "Stage1 횟수", "s1", "100", 10)
-        # 추가 탐색(체크 시): Stage 2 = FX 컴프레서(손실이 잘 봄), Stage 3 = MOD 전수.
-        # 둘 다 안 맞으면 자동 bypass(optimize_or_bypass) → 켜도 톤 안 망침. 기본 ON.
+        # 추가 탐색(체크 시): Stage 2 = FX 컴프레서, Stage 3 = MOD 전수.
+        # 안 맞으면 자동 bypass(optimize_or_bypass) → 켜도 톤 안 망침.
+        # 컴프는 노이즈 바닥을 끌어올려(다이내믹 압축+메이크업) 히스가 도드라짐 + 이득
+        # 미미(실측 Δ~0.01)라 기본 OFF, 필요한 곡만 체크. MOD는 기본 ON.
         # 딜레이/리버브는 손실로 못 잡음 → 별도 [딜레이/리버브] A/B 버튼이 담당.
         ttk.Label(frm, text="추가 탐색").grid(row=4, column=0, sticky="e", padx=4, pady=3)
         sf = ttk.Frame(frm)
         sf.grid(row=4, column=1, columnspan=3, sticky="w", padx=4)
-        self.search_comp = tk.BooleanVar(value=True)   # Stage 2: FX 컴프(~4분)
+        self.search_comp = tk.BooleanVar(value=False)  # Stage 2: FX 컴프(~4분, 기본 OFF=노이즈)
         self.search_mod = tk.BooleanVar(value=True)    # Stage 3: MOD 전수(~7분)
         ttk.Checkbutton(sf, text="FX 컴프(~4분)", variable=self.search_comp).grid(
             row=0, column=0, sticky="w", padx=(0, 12))
