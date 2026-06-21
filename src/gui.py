@@ -447,31 +447,33 @@ class App:
         # DI 녹음: 기타를 FX150에 꽂고 길이(초) 정한 뒤 [DI 녹음] → work/songs/<곡>/di.wav.
         # 그 곡 학습 때 자동으로 그 DI를 씀(곡 맞춤 연주로 정확도↑).
         ttk.Label(frm, text="DI 녹음 길이(초)").grid(row=8, column=0, sticky="e", padx=4, pady=3)
-        self.v["di_sec"] = tk.StringVar(value="15")
-        ttk.Entry(frm, textvariable=self.v["di_sec"], width=8).grid(row=8, column=1, sticky="w", padx=4)
         btns = ttk.Frame(frm)
-        btns.grid(row=8, column=2, columnspan=2, sticky="w", padx=4)
+        btns.grid(row=8, column=1, columnspan=3, sticky="w", padx=4)
+        # 길이 입력칸을 DI 버튼들과 한 그룹으로(가운데 갭 방지)
+        self.v["di_sec"] = tk.StringVar(value="15")
+        ttk.Entry(btns, textvariable=self.v["di_sec"], width=6).grid(
+            row=0, column=0, padx=(0, 8), pady=(0, 3))
         # 1행: DI 녹음/재생/검증
         self.rec_btn = ttk.Button(btns, text="DI 녹음", command=self._record, width=8)
-        self.rec_btn.grid(row=0, column=0, padx=2, pady=(0, 3))
+        self.rec_btn.grid(row=0, column=1, padx=2, pady=(0, 3))
         self.play_btn = ttk.Button(btns, text="DI 듣기", command=self._play_di, width=8)
-        self.play_btn.grid(row=0, column=1, padx=2, pady=(0, 3))
+        self.play_btn.grid(row=0, column=2, padx=2, pady=(0, 3))
         ttk.Button(btns, text="타겟 듣기", command=self._play_target, width=8).grid(
-            row=0, column=2, padx=2, pady=(0, 3))
-        ttk.Button(btns, text="리프 체크", command=self._riff_check, width=8).grid(
             row=0, column=3, padx=2, pady=(0, 3))
+        ttk.Button(btns, text="리프 체크", command=self._riff_check, width=8).grid(
+            row=0, column=4, padx=2, pady=(0, 3))
         # 2행: 따라치기(타겟 재생) 옵션 + 학습 후 딜레이/리버브 분석
         self.playalong = tk.BooleanVar(value=True)
         ttk.Checkbutton(btns, text="타겟 들으며", variable=self.playalong).grid(
-            row=1, column=0, sticky="w", padx=2)
+            row=1, column=1, sticky="w", padx=2)
         self.play_vol = tk.DoubleVar(value=40)
         self.play_vol_lbl = ttk.Label(btns, text="40%", width=4)
         ttk.Scale(btns, from_=0, to=100, orient="horizontal", length=90, variable=self.play_vol,
                   command=lambda v: self.play_vol_lbl.config(text=f"{float(v):.0f}%")
-                  ).grid(row=1, column=1, sticky="we", padx=2)
-        self.play_vol_lbl.grid(row=1, column=2, sticky="w")
+                  ).grid(row=1, column=2, sticky="we", padx=2)
+        self.play_vol_lbl.grid(row=1, column=3, sticky="w")
         ttk.Button(btns, text="딜레이/리버브", command=self._analyze_fx, width=11).grid(
-            row=1, column=3, padx=2)
+            row=1, column=4, padx=2)
 
         # 게인 레벨 체크박스(복수 선택). 선택한 캐릭터의 AMP 모델만 탐색(전부 해제=전체).
         ttk.Label(frm, text="게인 레벨\n(곡 성격, 복수)").grid(row=9, column=0, sticky="e", padx=4, pady=3)
