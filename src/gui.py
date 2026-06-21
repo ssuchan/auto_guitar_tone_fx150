@@ -93,8 +93,8 @@ class App:
         data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
         data["auto_gl"] = self.auto_gl.get()
         data["calibrate"] = self.calibrate.get()
-        data["search_comp"] = self.search_comp.get()
-        data["search_mod"] = self.search_mod.get()
+        # search_comp/search_mod는 영속화 안 함 — 매 실행 코드 기본값(컴프 OFF, MOD ON)을
+        # 항상 적용. 컴프는 노이즈 추가라 곡별로 그때그때 opt-in.
         return data
 
     def _apply_data(self, data):
@@ -105,8 +105,7 @@ class App:
             var.set(bool(data.get("gain_levels", {}).get(k, False)))
         self.auto_gl.set(bool(data.get("auto_gl", False)))
         self.calibrate.set(bool(data.get("calibrate", False)))
-        self.search_comp.set(bool(data.get("search_comp", False)))
-        self.search_mod.set(bool(data.get("search_mod", True)))
+        # search_comp/search_mod는 복원 안 함 — _build의 코드 기본값(OFF/ON) 유지.
 
     def _song_settings_path(self):
         song = self.v["song"].get().strip()
