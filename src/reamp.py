@@ -290,23 +290,40 @@ class ReampEvaluator:
             print(f"  (silent capture recovered after {retries} retry)", flush=True)
         return rec, sr, peak
 
+    @staticmethod
+    def _candidate_str(candidate):
+        """활성 체인 요약 문자열(무음 후보 로깅용)."""
+        return " ".join(f"{c}:m{m['model']}={m['params']}"
+                        for c, m in candidate.items() if m.get("enable", 1))
+
     def __call__(self, candidate):
         rec, sr, peak = self._apply_and_capture(candidate)
 
-        # 영구 무음 = FX150 USB 캡처 wedge(전원사이클만 복구, 실측). study를 버리지 않고
-        # 학습을 멈춰 전원사이클을 기다린 뒤 같은 trial을 재전송·재캡처해서 이어간다.
         if peak < SILENCE_PEAK_FLOOR:
             self._silent_streak += 1
             if self._silent_streak >= SILENT_WEDGE_STREAK:
+                # wedge(장치 먹통)인지 효과성 무음(RING/스터터/볼륨스웰 등 특정 후보가
+                # 본래 무음)인지 구분: 신호 보장된 baseline을 캡처해본다. baseline에 신호가
+                # 있으면 장치·신호경로 정상 → 현재 후보가 무음인 것 → wedge 아님(전원사이클
+                # 불필요). baseline마저 무음일 때만 진짜 신호경로 문제로 보고 복구 대기.
+                from apply_preset import baseline_candidate
+                _, _, base_peak = self._apply_and_capture(baseline_candidate())
+                if base_peak >= SILENCE_PEAK_FLOOR:
+                    self._silent_streak = 0
+                    self.prev = None    # baseline 적용됨 → 다음 trial 전 체인 재전송
+                    print(f"  [WARN] silent capture (peak={peak:.5f}) — 이 후보가 본래 "
+                          f"무음(baseline peak={base_peak:.3f} 정상 → wedge 아님). 페널티.\n"
+                          f"         silent-candidate: {self._candidate_str(candidate)}",
+                          flush=True)
+                    return SILENCE_PENALTY
+                # baseline도 무음 = 진짜 신호경로 문제(USB 캡처 wedge/재생 끊김) → 복구 대기.
                 self._recover_from_wedge()          # 사용자 전원OFF/ON 대기 → 복구
                 rec, sr, peak = self._apply_and_capture(candidate)  # 현재 trial 재시도
             if peak < SILENCE_PEAK_FLOOR:           # 단발 글리치 or 복구 직후 또 무음
-                # 무음 후보 로깅: 특정 모델/파라미터가 DSP를 hang시키는지 패턴추적용.
-                act = " ".join(f"{c}:m{m['model']}={m['params']}"
-                               for c, m in candidate.items() if m.get("enable", 1))
                 print(f"  [WARN] silent capture (peak={peak:.5f}) — "
                       f"무음 {self._silent_streak}회 연속(누적). 페널티 처리.\n"
-                      f"         silent-candidate: {act}", flush=True)
+                      f"         silent-candidate: {self._candidate_str(candidate)}",
+                      flush=True)
                 return SILENCE_PENALTY
         self._silent_streak = 0     # 신호 정상 → 연속 카운터 리셋
 
