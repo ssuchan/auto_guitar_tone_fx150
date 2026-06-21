@@ -47,13 +47,16 @@ def parse_time(s):
 
 GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 DUR_MIN, DUR_MAX = 3, 30          # 구간 길이(초) 하한/상한. 길면 리프체크↓·다운로드/학습 느림.
+STAGE2_TRIALS = 40                # FX 컴프 탐색 횟수(체크 시). ~4분.
+STAGE3_TRIALS = 70                # MOD 전수 브루트포스 총 횟수(체크 시). ~7분.
 
 
-def build_commands(py, *, song, s1, s2, gain, name, slot,
+def build_commands(py, *, song, s1, s2, s3, gain, name, slot,
                    gain_levels=None, calibrate=False, resume=False):
     """학습 argv 생성. 유튜브 다운로드는 [다운로드] 버튼에서 별도 처리."""
     train = [py, "-u", os.path.join(SRC, "main.py"), "--song", song,
-             "--trials", str(s1), "--stage2-trials", str(s2), "--play-gain", str(gain)]
+             "--trials", str(s1), "--stage2-trials", str(s2),
+             "--stage3-trials", str(s3), "--play-gain", str(gain)]
     # main.py가 calibrate 기본 ON이므로, 체크박스 해제를 반영하려면 명시적으로 전달.
     train += ["--calibrate"] if calibrate else ["--no-calibrate"]
     if resume:                          # 이전 best에서 이어서 개선
@@ -90,6 +93,8 @@ class App:
         data["gain_levels"] = {k: var.get() for k, var in self.gain_levels.items()}
         data["auto_gl"] = self.auto_gl.get()
         data["calibrate"] = self.calibrate.get()
+        data["search_comp"] = self.search_comp.get()
+        data["search_mod"] = self.search_mod.get()
         return data
 
     def _apply_data(self, data):
@@ -100,6 +105,8 @@ class App:
             var.set(bool(data.get("gain_levels", {}).get(k, False)))
         self.auto_gl.set(bool(data.get("auto_gl", False)))
         self.calibrate.set(bool(data.get("calibrate", False)))
+        self.search_comp.set(bool(data.get("search_comp", True)))
+        self.search_mod.set(bool(data.get("search_mod", True)))
 
     def _song_settings_path(self):
         song = self.v["song"].get().strip()
@@ -406,14 +413,18 @@ class App:
         ttk.Button(frm, text="이전 프리셋", command=self._open_preset_browser).grid(
             row=2, column=3, sticky="we", padx=4)
         field(3, "Stage1 횟수", "s1", "100", 10)
-        # Stage2(딜레이/리버브) 자동탐색: 손실이 시간계 효과를 못 잡아 랜덤값이 박힘 →
-        # 기본 OFF(체크 시에만). 끄면 깔끔한 앰프/캡/EQ 프리셋, 딜레이/리버브는 페달에서 귀로.
-        ttk.Label(frm, text="Stage2 횟수").grid(row=4, column=0, sticky="e", padx=4, pady=3)
-        self.v["s2"] = tk.StringVar(value="50")
-        ttk.Entry(frm, textvariable=self.v["s2"], width=10).grid(row=4, column=1, sticky="w", padx=4)
-        self.search_fx = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text="딜레이·리버브 자동탐색(비추천)", variable=self.search_fx).grid(
-            row=4, column=2, columnspan=2, sticky="w", padx=4)
+        # 추가 탐색(체크 시): Stage 2 = FX 컴프레서(손실이 잘 봄), Stage 3 = MOD 전수.
+        # 둘 다 안 맞으면 자동 bypass(optimize_or_bypass) → 켜도 톤 안 망침. 기본 ON.
+        # 딜레이/리버브는 손실로 못 잡음 → 별도 [딜레이/리버브] A/B 버튼이 담당.
+        ttk.Label(frm, text="추가 탐색").grid(row=4, column=0, sticky="e", padx=4, pady=3)
+        sf = ttk.Frame(frm)
+        sf.grid(row=4, column=1, columnspan=3, sticky="w", padx=4)
+        self.search_comp = tk.BooleanVar(value=True)   # Stage 2: FX 컴프(~4분)
+        self.search_mod = tk.BooleanVar(value=True)    # Stage 3: MOD 전수(~7분)
+        ttk.Checkbutton(sf, text="FX 컴프(~4분)", variable=self.search_comp).grid(
+            row=0, column=0, sticky="w", padx=(0, 12))
+        ttk.Checkbutton(sf, text="모드 MOD(~7분)", variable=self.search_mod).grid(
+            row=0, column=1, sticky="w")
         # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
         ttk.Label(frm, text="play-gain").grid(row=5, column=0, sticky="e", padx=4, pady=3)
         self.v["gain"] = tk.StringVar(value="0.4")
@@ -527,9 +538,8 @@ class App:
             if not song:
                 raise ValueError("곡 제목을 입력하세요.")
             s1 = self._num_field("s1", "Stage1 횟수", 1, 1000, cast=int)
-            s2 = self._num_field("s2", "Stage2 횟수", 0, 1000, cast=int)
-            if not self.search_fx.get():
-                s2 = 0   # 딜레이/리버브 자동탐색 OFF(기본) → Stage 2 스킵(랜덤 효과 방지)
+            s2 = STAGE2_TRIALS if self.search_comp.get() else 0   # FX 컴프
+            s3 = STAGE3_TRIALS if self.search_mod.get() else 0    # MOD 전수
             gain = self._num_field("gain", "play-gain", 0.01, 2.0)
             name = self.v["name"].get().strip()
             slot = self.v["slot"].get().strip()
@@ -548,7 +558,7 @@ class App:
 
         levels = ["auto"] if self.auto_gl.get() else \
             [lv for lv, v in self.gain_levels.items() if v.get()]
-        cmds = build_commands(self.py, song=song, s1=s1, s2=s2, gain=gain,
+        cmds = build_commands(self.py, song=song, s1=s1, s2=s2, s3=s3, gain=gain,
                               name=name, slot=slot, gain_levels=levels,
                               calibrate=self.calibrate.get(), resume=self.resume.get())
         self.btn.config(text="학습 중...")
@@ -862,7 +872,8 @@ class App:
 
 def main():
     root = tk.Tk()
-    root.geometry("760x620")
+    root.geometry("912x620")
+    root.minsize(912, 560)   # 더 줄이면 입력칸/버튼이 잘려 안 보임 → 최소폭 고정
     App(root)
     root.mainloop()
 

@@ -153,15 +153,21 @@ def _model_params(chain, model_idx):
     return [(p["name"], para_steps(p)) for p in m["paras"]]
 
 
-def _suggest_model(trial, chain):
-    """모델 선택. 허용목록(CHAIN_INCLUDE_MODELS) 있으면 그 안에서, 없으면 전체.
-    제외목록(CHAIN_EXCLUDE_MODELS)은 항상 빼고 categorical로 샘플."""
+def _allowed_models(chain):
+    """탐색 가능한 모델 인덱스 목록. 허용목록(CHAIN_INCLUDE_MODELS) 있으면 그 안에서,
+    없으면 전체. 제외목록(CHAIN_EXCLUDE_MODELS)은 항상 뺀다."""
     n = len(SPEC[chain]["models"])
     base = CHAIN_INCLUDE_MODELS.get(chain) or list(range(1, n + 1))
     exclude = CHAIN_EXCLUDE_MODELS.get(chain, set())
     allowed = [m for m in base if m not in exclude]
     if not allowed:                       # prior가 전부 제외하면 안전하게 전체로
         allowed = [m for m in range(1, n + 1) if m not in exclude]
+    return allowed
+
+
+def _suggest_model(trial, chain):
+    """모델 선택. _allowed_models에서 categorical로 샘플."""
+    allowed = _allowed_models(chain)
     if len(allowed) == 1:
         return allowed[0]
     return trial.suggest_categorical(f"{chain}.model", allowed)
@@ -262,11 +268,14 @@ class _TimeLimitStop:
 
 
 def _run_study(evaluator, chains_config, n_trials, sampler, enqueue=None,
-               progress=False, label="", time_limit_sec=None):
-    """단일 Optuna study 실행."""
+               enqueue_list=None, progress=False, label="", time_limit_sec=None):
+    """단일 Optuna study 실행. enqueue_list가 있으면 그 trial들을 순서대로 선평가
+    (결정적 전수 스윕용 — sampler 무관)."""
     study = optuna.create_study(direction="minimize", sampler=sampler)
     if enqueue:
         study.enqueue_trial(enqueue)
+    for e in (enqueue_list or []):
+        study.enqueue_trial(e)
 
     t0 = _time.monotonic()
 
@@ -404,6 +413,89 @@ def staged_optimize(evaluator, chains_config, n_coarse=60, n_fine=140, seed=0,
     if stage_a_sec or study_b.best_value <= study_a.best_value:
         return study_b, best_b
     return study_a, best_a
+
+
+def brute_optimize(evaluator, chains_config, brute_chain, total_trials,
+                   repeats=2, seed=0, progress=False, stage_b_sampler="tpe"):
+    """brute_chain을 전 모델 결정적 스윕(각 repeats회, center 파라미터)으로 평가 →
+    평균 손실이 가장 낮은 모델 1개 선택 → 그 모델 파라미터만 Stage B(TPE)로 세밀화.
+
+    랜덤 모델탐색이 손실이 미묘한 모델(MOD 코러스/플랜저 등) 일부를 아예 안 보는
+    문제를 피한다(결정적 전수). brute_chain은 optimize_or_bypass 가정(bypass도 후보).
+    다른 체인은 frozen/bypass로 고정된 chains_config를 받는다.
+    스윕 = repeats*(모델수+1[bypass]) trial, 나머지가 Stage B 세밀화.
+    선택 모델 평균이 bypass 평균보다 못하면 bypass 채택(세밀화 생략).
+
+    반환: (study, candidate, headline_loss). headline_loss는 호출측 채택 비교용
+    (모델 채택=세밀화 best의 단발 loss, bypass 채택=bypass 평균 loss)."""
+    allowed = _allowed_models(brute_chain)
+
+    def center(model):
+        return [steps // 2 for _, steps in _model_params(brute_chain, model)]
+
+    # ── 스윕 enqueue: bypass repeats회 + 각 모델 center repeats회 ──────────
+    enq = [{f"{brute_chain}.enable": 0} for _ in range(repeats)]
+    for m in allowed:
+        d = {f"{brute_chain}.enable": 1, f"{brute_chain}.model": m}
+        for (nm, _), v in zip(_model_params(brute_chain, m), center(m)):
+            d[f"{brute_chain}.{nm}"] = v
+        enq.extend(dict(d) for _ in range(repeats))
+
+    sweep_n = len(enq)
+    n_fine = max(0, total_trials - sweep_n)
+    if progress:
+        print(f"[Sweep] {brute_chain} 전 모델 전수  {len(allowed)}모델×{repeats} + "
+              f"bypass×{repeats} = {sweep_n} trials")
+    study, _ = _run_study(evaluator, chains_config, sweep_n,
+                          optuna.samplers.RandomSampler(seed=seed),
+                          enqueue_list=enq, progress=progress, label="S ")
+
+    # ── 모델별 평균 손실 → 최고 모델 선택 ──────────────────────────────
+    groups = {}   # key: ("bypass",) 또는 ("model", m) → [trial, ...]
+    for t in study.trials:
+        if t.value is None:
+            continue
+        mc = t.user_attrs["candidate"][brute_chain]
+        key = ("bypass",) if mc.get("enable", 1) == 0 else ("model", mc["model"])
+        groups.setdefault(key, []).append(t)
+    means = {k: sum(t.value for t in ts) / len(ts) for k, ts in groups.items()}
+    bypass_mean = means.get(("bypass",), float("inf"))
+    model_keys = [k for k in means if k[0] == "model"]
+    best_key = min(model_keys, key=lambda k: means[k]) if model_keys else None
+
+    if progress and means:
+        rank = sorted(means.items(), key=lambda kv: kv[1])
+        for k, mn in rank[:6]:
+            tag = "bypass" if k[0] == "bypass" else f"model {k[1]}"
+            print(f"    {tag:10}: mean={mn:.4f}")
+
+    # bypass가 더 좋으면(또는 모델 없음) bypass 채택 → 세밀화 생략
+    if best_key is None or means[best_key] >= bypass_mean:
+        bypass_cand = next(t.user_attrs["candidate"] for t in study.trials
+                           if t.user_attrs["candidate"][brute_chain].get("enable", 1) == 0)
+        if progress:
+            print(f"[Brute] {brute_chain} bypass 채택(모델이 off보다 못함)")
+        return study, bypass_cand, bypass_mean
+
+    best_model = best_key[1]
+    warm_trial = min(groups[best_key], key=lambda t: t.value)
+    warm_cand = warm_trial.user_attrs["candidate"]
+
+    if n_fine == 0:                       # 예산이 스윕에 다 쓰임 → 세밀화 없이 best 단발
+        return study, warm_cand, warm_trial.value
+
+    fine_config = dict(chains_config)
+    fine_config[brute_chain] = ("fix", best_model)
+    enqueue = {f"{brute_chain}.{nm}": v
+               for (nm, _), v in zip(_model_params(brute_chain, best_model),
+                                     warm_cand[brute_chain]["params"])}
+    if progress:
+        print(f"[Stage B] {brute_chain} model {best_model} param fine-tune  "
+              f"{n_fine} trials")
+    study_b, best_b = _run_study(evaluator, fine_config, n_fine,
+                                 _make_sampler(stage_b_sampler, seed),
+                                 enqueue=enqueue, progress=progress, label="B ")
+    return study_b, best_b, study_b.best_value
 
 
 def resume_optimize(evaluator, prev_best, n_trials, seed=0, progress=False,

@@ -7,10 +7,11 @@
       --play-device = DI를 FX150 입력잭으로 보내는 PC 라인아웃 장치 인덱스.
 출력: 최적 설정을 FX150에 적용 + work/results/<타임스탬프>/ 에 결과 저장.
 
-2단계 흐름:
-  Stage 1: OD/AMP/CAB/EQ 최적화 (MOD/DELAY/REVERB bypass 고정)
-  Stage 2: Stage 1 결과 고정 + DELAY/REVERB 추가 최적화 (--stage2-trials로 제어)
-           (MOD는 자동 탐색 제외 — 시변 효과라 loss로 판단 어려움, 수동 권장)
+3단계 흐름:
+  Stage 1: OD/AMP/CAB/EQ 최적화 (FX/MOD/DELAY/REVERB bypass 고정)
+  Stage 2: Stage 1 결과 고정 + FX 컴프레서 추가 최적화 (--stage2-trials로 제어)
+  Stage 3: Stage 2 결과 고정 + MOD 전수 브루트포스 (--stage3-trials로 제어)
+           (DELAY/REVERB는 loss로 판단 불가 → 별도 경로 target_fx + GUI A/B가 담당)
 """
 import os
 import json
@@ -19,8 +20,9 @@ import shutil
 import datetime
 import argparse
 import optimizer
-from optimizer import (staged_optimize, resume_optimize, print_importance,
-                       GAIN_LEVELS, amp_models_for_levels, robust_refine)
+from optimizer import (staged_optimize, brute_optimize, resume_optimize,
+                       print_importance, GAIN_LEVELS, amp_models_for_levels,
+                       robust_refine)
 from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
                           load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
@@ -73,17 +75,21 @@ DEFAULT_CHAINS = {
     "REVERB":"bypass",
 }
 
-# Stage 2: DELAY/REVERB만 선택적으로 탐색. MOD는 제외(피치/페이저 등 엉뚱한 게 자주
-# 골라져 기본 톤을 망침 → 항상 bypass 유지). 필요하면 여기 "MOD" 다시 추가.
-STAGE2_CHAINS = {"DELAY", "REVERB"}
-STAGE2_FLUSH_SEC = 1.5   # Stage 2 캡처 전 무음 프리롤(초) — 직전 trial 잔향 흘려보냄
+# Stage 2: FX 컴프레서만 탐색(optimize_or_bypass). FX 모델 1·2(CS/JR COMP)만 — 와우/토크
+# (3~8)는 연주의존적/EQ중복이라 제외. 컴프는 loss가 잘 봄(실측 OFF대비 14배 반응).
+STAGE2_CHAINS = {"FX"}
+STAGE2_FX_MODELS = [1, 2]   # CS COMP, JR COMP
+optimizer.CHAIN_INCLUDE_MODELS["FX"] = STAGE2_FX_MODELS  # FX 탐색은 컴프 모델만
+# Stage 3: MOD 전수 브루트포스(optimize_or_bypass). 손실이 미묘한 모델도 빠짐없이 보려고
+# 랜덤 대신 결정적 전수(brute_optimize). LOFI(14)는 optimizer에서 이미 제외.
+STAGE3_CHAIN = "MOD"
 
 
-def _make_stage2_config(best1):
-    """Stage 1 결과를 frozen으로 고정, STAGE2_CHAINS(DELAY/REVERB)만 새로 탐색."""
+def _freeze_config(best, search_chains):
+    """best를 frozen으로 고정하되 search_chains는 optimize_or_bypass로 새로 탐색."""
     cfg = {}
-    for chain, m in best1.items():
-        if chain in STAGE2_CHAINS:
+    for chain, m in best.items():
+        if chain in search_chains:
             cfg[chain] = "optimize_or_bypass"
         elif m.get("enable", 1) == 0:
             cfg[chain] = "bypass"
@@ -167,8 +173,11 @@ def main():
                     help="line-out device index. Auto-detect (Realtek MME) if omitted")
     ap.add_argument("--trials", type=int, default=100,
                     help="Stage 1 optimization trials (default 100)")
-    ap.add_argument("--stage2-trials", type=int, default=50,
-                    help="Stage 2 DELAY/REVERB trials. 0=skip (default 50)")
+    ap.add_argument("--stage2-trials", type=int, default=40,
+                    help="Stage 2 FX 컴프레서 trials. 0=skip (default 40)")
+    ap.add_argument("--stage3-trials", type=int, default=70,
+                    help="Stage 3 MOD 전수 브루트포스 총 trials(스윕+세밀화). 0=skip "
+                         "(default 70)")
     ap.add_argument("--play-gain", type=float, default=0.4,
                     help="DI playback gain into FX150. 캡처 클리핑 나면 낮춰라. DI는 "
                          "정규화되니 0.4로 대부분 OK. --calibrate로 자동보정 가능 (default 0.4)")
@@ -342,19 +351,15 @@ def main():
         final_loss = study1.best_value
         final_study = study1
 
-        # ── Stage 2: DELAY / REVERB (resume이면 전 체인 포함이라 생략) ───
+        # ── Stage 2: FX 컴프레서 (resume이면 전 체인 포함이라 생략) ───
         run_stage2 = args.stage2_trials > 0 and not args.mock and not prev_best
         if run_stage2:
             ev.reset_tracking()   # prev 초기화 → Stage 2 첫 trial이 전 체인 정합 전송
-            # 잔향 오염 방지: Stage 2부터 켜고 robust 재평가까지 유지(robust가 딜레이/리버브
-            # 후보를 고르는 지점이라 여기서 끄면 오염된 평균으로 잘못된 최종 선택을 함).
-            ev.flush_sec = STAGE2_FLUSH_SEC
-            cfg2 = _make_stage2_config(best1)
+            cfg2 = _freeze_config(final_best, STAGE2_CHAINS)
             n_coarse2 = max(1, args.stage2_trials // 3)
             print(f"\n{'─'*50}")
-            print(f"[Stage 2] DELAY/REVERB optimization  {args.stage2_trials} trials")
+            print(f"[Stage 2] FX 컴프레서 optimization  {args.stage2_trials} trials")
             print(f"{'─'*50}")
-            # Stage 2는 풀 DI(시간계 이펙트 DELAY/REVERB 꼬리가 짧은 DI에 안 담김).
             study2, best2 = staged_optimize(ev, cfg2,
                                             n_coarse=n_coarse2,
                                             n_fine=args.stage2_trials - n_coarse2,
@@ -365,20 +370,51 @@ def main():
             print_importance(study2)
 
             results.append({
-                "label": "Stage 2 (+ DELAY/REVERB)",
+                "label": "Stage 2 (+ FX 컴프)",
                 "best": best2,
                 "loss": study2.best_value,
                 "study": study2,
                 "parts": _get_parts(ev, ev.best_rec),
             })
 
-            if study2.best_value < study1.best_value:
-                print(f"\nImproved: {study1.best_value:.4f} → {study2.best_value:.4f} ✓")
+            if study2.best_value < final_loss:
+                print(f"\nImproved: {final_loss:.4f} → {study2.best_value:.4f} ✓")
                 final_best = best2
                 final_loss = study2.best_value
                 final_study = study2
             else:
-                print("\nStage 2 no improvement — keeping Stage 1 result")
+                print("\nStage 2 no improvement — keeping previous result")
+
+        # ── Stage 3: MOD 전수 브루트포스 (resume이면 생략) ───────────────
+        run_stage3 = args.stage3_trials > 0 and not args.mock and not prev_best
+        if run_stage3:
+            ev.reset_tracking()   # prev 초기화 → Stage 3 첫 trial이 전 체인 정합 전송
+            cfg3 = _freeze_config(final_best, {STAGE3_CHAIN})
+            print(f"\n{'─'*50}")
+            print(f"[Stage 3] MOD 전수 브루트포스  {args.stage3_trials} trials")
+            print(f"{'─'*50}")
+            study3, best3, loss3 = brute_optimize(ev, cfg3, STAGE3_CHAIN,
+                                                  total_trials=args.stage3_trials,
+                                                  repeats=2, progress=True,
+                                                  stage_b_sampler=args.stage_b_sampler)
+            print(f"\n=== Stage 3 best loss = {loss3:.4f} ===")
+            print(describe(best3))
+
+            results.append({
+                "label": "Stage 3 (+ MOD)",
+                "best": best3,
+                "loss": loss3,
+                "study": study3,
+                "parts": _get_parts(ev, ev.best_rec),
+            })
+
+            if loss3 < final_loss:
+                print(f"\nImproved: {final_loss:.4f} → {loss3:.4f} ✓")
+                final_best = best3
+                final_loss = loss3
+                final_study = study3
+            else:
+                print("\nStage 3 no improvement — keeping previous result")
 
         # ── 노이즈 방어: 상위 후보 재평가로 최종 선택(단발 운빨 best 거름) ──────
         if not args.mock and ev.h is not None and args.robust_topk > 0:
