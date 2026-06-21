@@ -24,6 +24,19 @@ WORK = os.path.join(os.path.dirname(__file__), "..", "work")
 SR = 44100
 
 
+def _ensure_deno_on_path():
+    """유튜브가 JS 챌린지(nsig/서명)를 요구하면서 yt-dlp는 JS 런타임(deno) 없이는
+    오디오 포맷을 못 받는다(403/포맷없음). ~/.deno/bin에 설치된 deno를 PATH에 노출 →
+    in-process YoutubeDL과 subprocess yt_dlp 둘 다 자동으로 찾는다(없으면 무시)."""
+    deno_dir = os.path.join(os.path.expanduser("~"), ".deno", "bin")
+    if (os.path.isfile(os.path.join(deno_dir, "deno.exe"))
+            and deno_dir not in os.environ.get("PATH", "")):
+        os.environ["PATH"] = deno_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+_ensure_deno_on_path()
+
+
 def _ffmpeg_exe():
     """시스템 ffmpeg 우선, 없으면 imageio-ffmpeg 번들 사용."""
     import shutil
@@ -65,7 +78,12 @@ def download_audio(url, out_wav):
             pass
     # yt-dlp CLI는 PATH에 없을 수 있어 python -m yt_dlp 로 호출(모듈은 설치돼 있음).
     # --no-playlist: &list=...(라디오/재생목록) 링크여도 그 동영상 1개만 받음.
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-x", "--audio-format", "wav",
+    # --remote-components ejs:github: 유튜브 JS 챌린지 해결 스크립트(EJS)를 GitHub에서
+    # 받아 deno로 nsig/서명을 푼다(deno는 _ensure_deno_on_path로 PATH에 노출). 둘 다
+    # 있어야 오디오 포맷이 받아짐(없으면 403/이미지만). 솔버 스크립트는 캐시됨.
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist",
+           "--remote-components", "ejs:github",
+           "-x", "--audio-format", "wav",
            "--audio-quality", "0", "-o", out_wav.replace(".wav", ".%(ext)s"), url]
     ffmpeg = _ffmpeg_exe()
     if ffmpeg:
