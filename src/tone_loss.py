@@ -85,6 +85,12 @@ def features(x, sr_in=None):
     # 다이내믹을 압축해 crest를 낮춘다(clean=높음). 옵티마이저가 clean 타겟에 디스토션을
     # 처박는 걸 막는 직접 신호(스펙트럼 특징은 디스토션으로 우회 가능). 99.5%로 스파이크 둔감.
     crest = 20.0 * float(np.log10(np.percentile(np.abs(y), 99.5) + 1e-9))
+    # presence: 2~6kHz(기타 어택/날카로움 대역) 에너지 비율. 톤의 '밝기 vs 방구톤'을 직접
+    # 잡는다. centroid/rolloff(Hz)는 Nyquist 정규화로 사실상 0가중이라 밝기 매칭에 무력 →
+    # 옵티마이저가 톤을 어둡게 비틀어도 벌점이 안 붙던 문제를 직접 해결(실측 검증).
+    freqs = librosa.fft_frequencies(sr=SR, n_fft=N_FFT)
+    band = (freqs >= 2000) & (freqs < 6000)
+    presence = float(S[band].sum() / (S.sum() + 1e-9))
     return {
         "ltas": ltas,
         "mfcc_mean": mfcc.mean(axis=1),
@@ -92,6 +98,7 @@ def features(x, sr_in=None):
         "contrast": contrast.mean(axis=1),   # (7,)
         "centroid": float(cent.mean()),
         "rolloff": float(roll.mean()),
+        "presence": presence,                # 2~6kHz 에너지 비율(밝기/날카로움)
         "flatness": float(flat.mean()),
         "crest": crest,                      # crest factor(dB) — 디스토션/압축 정도
         "env_ac": _env_autocorr(env),        # 딜레이/리버브(시간 자기유사성)
@@ -99,12 +106,15 @@ def features(x, sr_in=None):
     }
 
 
-# 가중치: ltas(EQ 형태)가 가장 중요, spectral contrast(왜곡 캐릭터) 추가
+# 가중치: ltas(EQ 형태)+presence(밝기)가 톤 매칭 핵심. mfcc는 노트 내용에 민감(톤 아님)
+# 이라 낮춤 — 높으면 옵티마이저가 밝기를 맞추려 할 때 mfcc가 치솟아 벌점 → 방구톤(어두운
+# 톤)을 더 선호하는 역설이 생긴다(실측: 밝게 보정하면 mfcc_mean↑로 손실 악화). 검증 완료.
 W = {
     "ltas":      2.0,
-    "mfcc_mean": 1.0,
-    "mfcc_std":  0.3,
+    "mfcc_mean": 0.3,
+    "mfcc_std":  0.1,
     "contrast":  1.0,
+    "presence":  6.0,   # 2~6kHz 밝기 매칭(방구톤 방지) — Hz정규화로 무력한 centroid 대체
     "centroid":  0.8,
     "rolloff":   0.3,
     "flatness":  0.5,
@@ -127,6 +137,7 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     nyq = SR / 2
     parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / nyq
     parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / nyq
+    parts["presence"] = abs(fa["presence"] - fb["presence"])   # 2~6kHz 비율 차이
     parts["flatness"] = abs(fa["flatness"] - fb["flatness"]) * 5
     # crest factor(dB) 차이를 ~12dB 스케일로 정규화(clean~14 vs 디스토션~7dB대 실측 근사)
     parts["crest"] = abs(fa["crest"] - fb["crest"]) / 12.0
