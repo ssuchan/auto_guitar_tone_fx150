@@ -24,9 +24,8 @@ warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning
 # 고정 불필요. 단, 장비가 HID 쓰기를 무시하는 모델은 제외(대체 모델 있음).
 CHAIN_EXCLUDE_MODELS = {
     "EQ":  {4},     # 4 BAND CUSTOM: FREQ 직접설정이 HID로 안 먹힘 → 6 BAND 고정주파수 사용
-    # MOD 14 LOFI(SAMPLE Hz): 미검증이라 보수적 제외. (RING 13은 사용자 요청으로 재포함 —
-    # 무음은 reamp의 baseline 확인으로 가짜 wedge 안 됨, presence 손실로 게이밍도 억제.)
-    "MOD": {14},
+    # MOD 전 모델 탐색. (예전 LOFI(14) 제외 사유 'SAMPLE Hz 미검증'은 BE 인코딩 크랙으로
+    # 무효화됨 — 큰 Hz값도 정확히 써짐. RING(13) 무음도 baseline 확인으로 가짜 wedge 안 됨.)
     # CAB 31~80 = "IR XX: EMPTY" 빈 사용자 IR 슬롯. 임펄스 미로드라 선택 시 출력
     # 무음(실측: 랜덤 CAB의 62.5%가 여기 걸려 가짜 '무음/wedge' 양산 + pause 오발동).
     # 내장 캐비닛 1~30만 탐색.
