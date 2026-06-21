@@ -402,11 +402,13 @@ class App:
             row=0, column=3, sticky="we", padx=4)
 
         ttk.Label(frm, text="구간 (mm:ss)").grid(row=1, column=0, sticky="e", padx=4, pady=3)
+        seg = ttk.Frame(frm)
+        seg.grid(row=1, column=1, columnspan=3, sticky="w", padx=4)
         self.v["start"] = tk.StringVar()
         self.v["end"] = tk.StringVar()
-        ttk.Entry(frm, textvariable=self.v["start"], width=8).grid(row=1, column=1, sticky="w", padx=4)
-        ttk.Label(frm, text="~").grid(row=1, column=2)
-        ttk.Entry(frm, textvariable=self.v["end"], width=8).grid(row=1, column=3, sticky="w")
+        ttk.Entry(seg, textvariable=self.v["start"], width=8).grid(row=0, column=0)
+        ttk.Label(seg, text="~").grid(row=0, column=1, padx=6)
+        ttk.Entry(seg, textvariable=self.v["end"], width=8).grid(row=0, column=2)
 
         ttk.Label(frm, text="곡 제목 (폴더명)").grid(row=2, column=0, sticky="e", padx=4, pady=3)
         self.v["song"] = tk.StringVar()
@@ -431,11 +433,13 @@ class App:
             row=0, column=1, sticky="w")
         # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
         ttk.Label(frm, text="play-gain").grid(row=5, column=0, sticky="e", padx=4, pady=3)
+        pg = ttk.Frame(frm)
+        pg.grid(row=5, column=1, columnspan=3, sticky="w", padx=4)
         self.v["gain"] = tk.StringVar(value="0.4")
-        ttk.Entry(frm, textvariable=self.v["gain"], width=8).grid(row=5, column=1, sticky="w", padx=4)
+        ttk.Entry(pg, textvariable=self.v["gain"], width=8).grid(row=0, column=0)
         self.calibrate = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text="자동보정(클리핑방지)", variable=self.calibrate).grid(
-            row=5, column=2, columnspan=2, sticky="w", padx=4)
+        ttk.Checkbutton(pg, text="자동보정(클리핑방지)", variable=self.calibrate).grid(
+            row=0, column=1, padx=(12, 0))
 
         field(6, "저장 이름 (≤11자)", "name", width=16, stretch=False)
         field(7, "슬롯 (예 38A, 비우면 자동)", "slot", width=16, stretch=False)
