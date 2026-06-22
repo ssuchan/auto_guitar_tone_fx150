@@ -17,6 +17,11 @@ HOP = 512
 N_MELS = 128
 N_MFCC = 20
 SILENCE_FLOOR = 1e-4   # 이 RMS 미만이면 사실상 무음으로 간주
+# 퍼셉추얼 밝기/밸런스 밴드(Hz). 단일 2~6kHz 비율은 옵티마이저가 한 대역을 부풀려 다른
+# 대역 결손을 상쇄해 게임당한다(실측: 2-3k 부풀려 3-4k 바이트 빼먹기=방구톤, 1-2k 스쿱+
+# 저음 붐=답답함). 대역별 에너지 비율을 따로 매칭해 상쇄 꼼수를 차단. 80Hz~10kHz 커버.
+PRESENCE_BANDS = [(80, 250), (250, 500), (500, 1000), (1000, 2000), (2000, 3000),
+                  (3000, 4000), (4000, 5000), (5000, 6000), (6000, 10000)]
 
 # 시간/공간 특징 파라미터 (리버브/딜레이/모듈레이션 포착용).
 FR = SR / HOP          # 엔벨로프 샘플레이트 ≈ 86.1 Hz
@@ -85,12 +90,13 @@ def features(x, sr_in=None):
     # 다이내믹을 압축해 crest를 낮춘다(clean=높음). 옵티마이저가 clean 타겟에 디스토션을
     # 처박는 걸 막는 직접 신호(스펙트럼 특징은 디스토션으로 우회 가능). 99.5%로 스파이크 둔감.
     crest = 20.0 * float(np.log10(np.percentile(np.abs(y), 99.5) + 1e-9))
-    # presence: 2~6kHz(기타 어택/날카로움 대역) 에너지 비율. 톤의 '밝기 vs 방구톤'을 직접
-    # 잡는다. centroid/rolloff(Hz)는 Nyquist 정규화로 사실상 0가중이라 밝기 매칭에 무력 →
-    # 옵티마이저가 톤을 어둡게 비틀어도 벌점이 안 붙던 문제를 직접 해결(실측 검증).
+    # presence: 퍼셉추얼 밴드별 에너지 비율 벡터(PRESENCE_BANDS). 밝기/밸런스를 대역마다
+    # 따로 잡아 '한 대역 부풀려 다른 대역 결손 상쇄'(방구톤/답답함) 꼼수를 막는다. 단일
+    # 2~6kHz 비율이 게임당하던 문제를 직접 해결(실측 검증: Realize 3-4k, DesertEagle 1-2k).
     freqs = librosa.fft_frequencies(sr=SR, n_fft=N_FFT)
-    band = (freqs >= 2000) & (freqs < 6000)
-    presence = float(S[band].sum() / (S.sum() + 1e-9))
+    total = S.sum() + 1e-9
+    presence = np.array([S[(freqs >= lo) & (freqs < hi)].sum() / total
+                         for lo, hi in PRESENCE_BANDS], dtype=np.float64)
     return {
         "ltas": ltas,
         "mfcc_mean": mfcc.mean(axis=1),
@@ -98,7 +104,7 @@ def features(x, sr_in=None):
         "contrast": contrast.mean(axis=1),   # (7,)
         "centroid": float(cent.mean()),
         "rolloff": float(roll.mean()),
-        "presence": presence,                # 2~6kHz 에너지 비율(밝기/날카로움)
+        "presence": presence,                # 밴드별 에너지 비율 벡터(밝기/밸런스)
         "flatness": float(flat.mean()),
         "crest": crest,                      # crest factor(dB) — 디스토션/압축 정도
         "env_ac": _env_autocorr(env),        # 딜레이/리버브(시간 자기유사성)
@@ -114,7 +120,7 @@ W = {
     "mfcc_mean": 0.3,
     "mfcc_std":  0.1,
     "contrast":  1.0,
-    "presence":  6.0,   # 2~6kHz 밝기 매칭(방구톤 방지) — Hz정규화로 무력한 centroid 대체
+    "presence":  6.0,   # 밴드별 밝기/밸런스 매칭(방구톤·답답함 방지). 벡터 L2라 게임 불가
     "centroid":  0.8,
     "rolloff":   0.3,
     "flatness":  0.5,
@@ -137,7 +143,7 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
     nyq = SR / 2
     parts["centroid"] = abs(fa["centroid"] - fb["centroid"]) / nyq
     parts["rolloff"] = abs(fa["rolloff"] - fb["rolloff"]) / nyq
-    parts["presence"] = abs(fa["presence"] - fb["presence"])   # 2~6kHz 비율 차이
+    parts["presence"] = float(np.linalg.norm(fa["presence"] - fb["presence"]))  # 밴드별 비율 L2
     parts["flatness"] = abs(fa["flatness"] - fb["flatness"]) * 5
     # crest factor(dB) 차이를 ~12dB 스케일로 정규화(clean~14 vs 디스토션~7dB대 실측 근사)
     parts["crest"] = abs(fa["crest"] - fb["crest"]) / 12.0
@@ -148,10 +154,13 @@ def tone_distance(a, b, sr_a=None, sr_b=None, return_parts=False):
 
 
 def _note_match_pct(di, target):
-    """basic-pitch로 음(노트)을 추출해 Levenshtein 편집거리로 리프 일치% 계산.
+    """basic-pitch 음(노트)을 피치클래스 시퀀스로 만들고, 짧은쪽(보통 타겟 리프 1회)을
+    긴쪽(반복 연주한 DI) 위로 슬라이딩해 최고 윈도우 Levenshtein 일치%를 낸다.
 
-    chroma(에너지)와 달리 실제 음 시퀀스를 비교 → 같은리프/다른리프 변별 신뢰 가능
-    (실측 3x3: 같은리프 33~38%, 다른리프 10~24%). basic-pitch 미설치면 None 반환.
+    raw 음 시퀀스 비교는 (1) basic-pitch 옥타브 오검출, (2) 반복 횟수 차이(DI 3회 vs
+    타겟 1회 → 길이비로 비율 상한)에 막혀 같은 리프를 낮게(실측 25%, 임계 미달) 평가했다.
+    → 피치클래스(mod12)로 옥타브를 무시하고 슬라이딩 윈도우로 반복을 흡수. 5곡 전수 실측
+    같은리프 ≥56% / 다른리프 ≤52%로 변별. basic-pitch 미설치면 None 반환.
     설치(py3.14): pip install basic-pitch --no-deps  +  pip install onnxruntime
     mir_eval pretty_midi Levenshtein resampy  (표준 설치는 구 tensorflow핀으로 깨짐)."""
     import os, contextlib
@@ -164,9 +173,21 @@ def _note_match_pct(di, target):
 
             def _seq(p):
                 notes = predict(p, ICASSP_2022_MODEL_PATH)[2]   # (start,end,pitch,..)
-                return "".join(chr(int(n[2])) for n in sorted(notes, key=lambda n: n[0]))
+                # 시작순 정렬 → 피치클래스(mod12). MIDI<55(옥타브-다운 오검출) 버림.
+                pcs = [int(n[2]) % 12 for n in sorted(notes, key=lambda n: n[0])
+                       if int(n[2]) >= 55]
+                return "".join(chr(c) for c in pcs)
 
-            return 100.0 * Levenshtein.ratio(_seq(di), _seq(target))
+            a, b = _seq(di), _seq(target)
+            if not a or not b:
+                return None
+            short, long = (a, b) if len(a) <= len(b) else (b, a)
+            L = len(short)
+            if len(long) <= L:
+                return 100.0 * Levenshtein.ratio(short, long)
+            # 짧은 리프를 긴쪽 위로 슬라이딩 → 최고 일치 윈도우(반복 횟수 차이 흡수)
+            return 100.0 * max(Levenshtein.ratio(short, long[i:i + L])
+                               for i in range(len(long) - L + 1))
     except Exception:
         return None
 
