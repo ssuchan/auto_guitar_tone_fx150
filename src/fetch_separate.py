@@ -88,7 +88,20 @@ def download_audio(url, out_wav):
     ffmpeg = _ffmpeg_exe()
     if ffmpeg:
         cmd += ["--ffmpeg-location", ffmpeg]
-    subprocess.run(cmd, check=True)
+    # 유튜브가 간헐적으로 403을 뱉음: android_vr 클라이언트가 발급한 일회성 서명 URL이
+    # 첫 시도에 가끔 forbidden. 같은 URL 재시도는 무의미(서명 만료) → 매 시도 fresh
+    # 추출(새 프로세스)로 재실행해야 새 서명 URL을 받아 성공. 그래서 retries=3.
+    import time
+    attempts = 3
+    for i in range(1, attempts + 1):
+        try:
+            subprocess.run(cmd, check=True)
+            return
+        except subprocess.CalledProcessError:
+            if i == attempts:
+                raise
+            print(f"  다운로드 실패(시도 {i}/{attempts}) — 새 서명 URL로 재시도...")
+            time.sleep(2)
 
 
 def trim(in_wav, out_wav, start, dur):
