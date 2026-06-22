@@ -499,6 +499,24 @@ def brute_optimize(evaluator, chains_config, brute_chain, total_trials,
     return study_b, best_b, study_b.best_value
 
 
+def fixed_model_optimize(evaluator, chains_config, chain, model, n_trials,
+                         seed=0, progress=False, stage_b_sampler="tpe"):
+    """chain을 지정 model로 고정하고 그 파라미터만 Stage B(TPE)로 세밀화 — 전수 스윕 생략.
+    귀로 MOD 종류를 정한 경우용(짧은 타겟이라 mod_spec로 모델 판별이 어려울 때). center
+    파라미터를 warm-start로 enqueue. 다른 체인은 frozen/bypass인 chains_config를 받는다.
+    반환: (study, candidate, best_loss)."""
+    fine_config = dict(chains_config)
+    fine_config[chain] = ("fix", model)
+    enqueue = {f"{chain}.{nm}": steps // 2
+               for nm, steps in _model_params(chain, model)}
+    if progress:
+        print(f"[Fixed] {chain} model {model} 고정 + 파라미터 세밀화  {n_trials} trials")
+    study, best = _run_study(evaluator, fine_config, n_trials,
+                             _make_sampler(stage_b_sampler, seed),
+                             enqueue=enqueue, progress=progress, label="F ")
+    return study, best, study.best_value
+
+
 def resume_optimize(evaluator, prev_best, n_trials, seed=0, progress=False,
                     stage_b_sampler="tpe"):
     """이전 학습 best에서 이어서 개선. 모델은 prev_best로 고정하고 파라미터만 미세조정

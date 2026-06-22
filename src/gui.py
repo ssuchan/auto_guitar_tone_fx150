@@ -49,14 +49,29 @@ GAIN_LEVELS = ["clean", "crunch", "overdrive", "distortion", "metal"]
 DUR_MIN, DUR_MAX = 3, 30          # 구간 길이(초) 하한/상한. 길면 리프체크↓·다운로드/학습 느림.
 STAGE2_TRIALS = 40                # FX 컴프 탐색 횟수(체크 시). ~4분.
 STAGE3_TRIALS = 70                # MOD 전수 브루트포스 총 횟수(체크 시). ~7분.
+# MOD 종류 드롭다운(귀로 종류 선택 시 그 모델 파라미터만 학습). 표시 index+1 = 모델 번호.
+# FX150 MOD 모델(펌웨어 고정) — main.py가 --mod-model 번호로 받는다.
+MOD_AUTO = "자동(전수 탐색)"
+MOD_MODELS = [
+    "01: 70S CHORUS", "02: TRI CHORUS", "03: ANA FLANGER", "04: JET FLANGER",
+    "05: 70S PHASER", "06: STEP PHASER", "07: HI-CUT PHASER", "08: PITCH VIBRATO",
+    "09: VIBE ROTARY", "10: TREMOLO", "11: STAMMER", "12: DETUNE", "13: RING",
+    "14: LOFI", "15: SLOW GEAR", "16: BAND-PASS", "17: LOW-CUT", "18: HI-CUT",
+    "19: PITCH MONO", "20: PITCH POLY",
+]
 
 
 def build_commands(py, *, song, s1, s2, s3, gain, name, slot,
-                   gain_levels=None, calibrate=False, resume=False):
+                   gain_levels=None, calibrate=False, resume=False, mod_model=0,
+                   mod_only=False):
     """학습 argv 생성. 유튜브 다운로드는 [다운로드] 버튼에서 별도 처리."""
     train = [py, "-u", os.path.join(SRC, "main.py"), "--song", song,
              "--trials", str(s1), "--stage2-trials", str(s2),
              "--stage3-trials", str(s3), "--play-gain", str(gain)]
+    if mod_model > 0:                   # MOD 종류 직접 선택 → 그 모델 파라미터만 세밀화
+        train += ["--mod-model", str(mod_model)]
+    if mod_only:                        # 이전 best 코어 고정 + MOD만(Stage 1/2 생략)
+        train += ["--mod-only"]
     # main.py가 calibrate 기본 ON이므로, 체크박스 해제를 반영하려면 명시적으로 전달.
     train += ["--calibrate"] if calibrate else ["--no-calibrate"]
     if resume:                          # 이전 best에서 이어서 개선
@@ -232,15 +247,18 @@ class App:
         info = self._resume_source_info(self.v["song"].get().strip())
         self.resume_label.set(info or "→ 대상 없음")
 
-    def _apply_song_url_time(self, song):
-        """곡 settings.json에서 유튜브 링크/구간(start/end)만 폼에 복원(있으면)."""
+    def _apply_song_settings(self, song):
+        """이전 프리셋 가져오기에서 곡을 고르면 그 곡 settings.json의 주요 입력값
+        (유튜브 링크·구간·슬롯·저장이름)을 폼에 복원하고 곡 제목도 그 곡으로 맞춘다.
+        settings.json/키가 없으면 곡 제목만 바꾸고 나머지는 폼 값 유지."""
+        self.v["song"].set(song)
         sp = os.path.join(ROOT, "work", "songs", song, "settings.json")
         try:
             with open(sp, encoding="utf-8") as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return
-        for k in ("url", "start", "end"):
+        for k in ("url", "start", "end", "slot", "name"):
             if isinstance(data.get(k), str):
                 self.v[k].set(data[k])
 
@@ -299,7 +317,7 @@ class App:
             sel = song_lb.curselection()
             if not sel:
                 return
-            self._apply_song_url_time(songs[sel[0]])   # 유튜브 링크/구간을 폼에 반영
+            self._apply_song_settings(songs[sel[0]])   # 링크·구간·슬롯·곡명·이름 폼에 반영
             state["presets"] = self._list_song_presets(songs[sel[0]])
             preset_lb.delete(0, "end")
             for it in state["presets"]:
@@ -428,9 +446,24 @@ class App:
         self.search_comp = tk.BooleanVar(value=False)  # Stage 2: FX 컴프(~4분, 기본 OFF=노이즈)
         self.search_mod = tk.BooleanVar(value=True)    # Stage 3: MOD 전수(~7분)
         ttk.Checkbutton(sf, text="FX 컴프(~4분)", variable=self.search_comp).grid(
-            row=0, column=0, sticky="w", padx=(0, 12))
+            row=0, column=0, columnspan=2, sticky="w", padx=(0, 12))
         ttk.Checkbutton(sf, text="모드 MOD(~7분)", variable=self.search_mod).grid(
-            row=0, column=1, sticky="w")
+            row=0, column=2, columnspan=2, sticky="w")
+        # MOD 종류 직접 선택(드롭다운 우선): 모델 고르면 체크 무관 그 모델 파라미터만 학습.
+        # '자동(전수)'이면 위 체크박스가 전수 탐색 on/off를 결정. 횟수는 사용자가 조절.
+        self.mod_model = tk.StringVar(value=MOD_AUTO)   # 영속화 안 함(곡별 선택)
+        ttk.Label(sf, text="MOD 종류").grid(row=1, column=0, sticky="e", pady=(3, 0))
+        ttk.Combobox(sf, textvariable=self.mod_model, values=[MOD_AUTO] + MOD_MODELS,
+                     width=15, state="readonly").grid(
+            row=1, column=1, columnspan=2, sticky="w", padx=4, pady=(3, 0))
+        ttk.Label(sf, text="횟수").grid(row=1, column=3, sticky="e", pady=(3, 0))
+        self.v["s3"] = tk.StringVar(value=str(STAGE3_TRIALS))
+        ttk.Entry(sf, textvariable=self.v["s3"], width=6).grid(
+            row=1, column=4, sticky="w", pady=(3, 0))
+        # MOD만(이전 best 코어 고정 후 MOD만 탐색 — Stage 1/2 생략, 빠름). best_candidate 필요.
+        self.mod_only = tk.BooleanVar(value=False)   # 영속화 안 함
+        ttk.Checkbutton(sf, text="MOD만 (이전 best 위에)", variable=self.mod_only).grid(
+            row=2, column=0, columnspan=5, sticky="w", pady=(3, 0))
         # play-gain + 자동보정 체크박스(체크 시 학습 전 baseline 캡처로 play-gain 자동정합 → 클리핑 방지).
         ttk.Label(frm, text="play-gain").grid(row=5, column=0, sticky="e", padx=4, pady=3)
         pg = ttk.Frame(frm)
@@ -552,7 +585,18 @@ class App:
                 raise ValueError("곡 제목을 입력하세요.")
             s1 = self._num_field("s1", "Stage1 횟수", 1, 1000, cast=int)
             s2 = STAGE2_TRIALS if self.search_comp.get() else 0   # FX 컴프
-            s3 = STAGE3_TRIALS if self.search_mod.get() else 0    # MOD 전수
+            s3_n = self._num_field("s3", "MOD 횟수", 0, 1000, cast=int)
+            sel = self.mod_model.get()                            # MOD 종류 드롭다운
+            mod_model = MOD_MODELS.index(sel) + 1 if sel != MOD_AUTO else 0
+            mod_only = self.mod_only.get()
+            if mod_only:                                          # 이전 best 위에 MOD만
+                if s3_n <= 0:
+                    raise ValueError("'MOD만' 모드에선 MOD 횟수가 1 이상이어야 해요.")
+                s3 = s3_n
+            elif mod_model > 0:                                   # 드롭다운 우선: 모델 고정
+                s3 = s3_n                                         # 체크 무관 그 모델 학습
+            else:                                                 # 자동(전수) → 체크박스가 결정
+                s3 = s3_n if self.search_mod.get() else 0
             gain = self._num_field("gain", "play-gain", 0.01, 2.0)
             name = self.v["name"].get().strip()
             slot = self.v["slot"].get().strip()
@@ -569,11 +613,19 @@ class App:
                                  "먼저 [다운로드]로 유튜브에서 받아 주세요.")
             return
 
+        if mod_only and not os.path.exists(             # MOD만 = 이전 best가 있어야 코어 고정
+                os.path.join(ROOT, "work", "songs", song, "best_candidate.json")):
+            messagebox.showerror("이전 결과 없음",
+                                 "'MOD만'은 이전 학습 결과 위에 MOD만 얹는 모드예요.\n"
+                                 "이 곡을 먼저 일반 학습(전체)으로 한 번 돌려 주세요.")
+            return
+
         levels = ["auto"] if self.auto_gl.get() else \
             [lv for lv, v in self.gain_levels.items() if v.get()]
         cmds = build_commands(self.py, song=song, s1=s1, s2=s2, s3=s3, gain=gain,
                               name=name, slot=slot, gain_levels=levels,
-                              calibrate=self.calibrate.get(), resume=self.resume.get())
+                              calibrate=self.calibrate.get(), resume=self.resume.get(),
+                              mod_model=mod_model, mod_only=mod_only)
         self.btn.config(text="학습 중...")
         self._run_cmds(cmds)
 
@@ -682,11 +734,16 @@ class App:
                 r = riff_match(di, tg)
                 msg = ("[리프 체크] 템포 일치 %.0f%% (내 DI %.0f / 타겟 %.0f BPM)\n"
                        % (r["tempo_pct"], r["tempo_di"], r["tempo_tg"]))
-                if "note_pct" in r:    # basic-pitch 음 일치(신뢰): 같은리프 ~33-38%, 다른 ~10-24%
+                if "note_pct" in r:    # 피치클래스+슬라이딩(옥타브/반복 무시): 같은리프≥56 다른≤52 (실측 5곡)
                     n = r["note_pct"]
-                    verdict = "같은 리프로 보임 ✓" if n >= 28 else "다른 리프/연주 차이 큼 ✗"
+                    if n >= 54:
+                        verdict = "같은 리프로 보임 ✓"
+                    elif n >= 45:
+                        verdict = "애매 — 귀로 확인 ?"
+                    else:
+                        verdict = "다른 리프/연주 차이 큼 ✗"
                     msg += ("  음(노트) 일치 %.0f%% → %s "
-                            "(같은리프 보통 ≥30%%, 딴리프 ≤25%%)\n" % (n, verdict))
+                            "(같은리프 ≥54%%, 애매 45~54%%, 딴리프 <45%%)\n" % (n, verdict))
                 else:
                     msg += ("  ※ 음 일치는 basic-pitch 미설치로 생략 → '타겟 듣기'로 귀 확인\n")
                 msg += "  ※ BPM이 ~2배 차이면 추정오류일 수 있음.\n"

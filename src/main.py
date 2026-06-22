@@ -20,9 +20,9 @@ import shutil
 import datetime
 import argparse
 import optimizer
-from optimizer import (staged_optimize, brute_optimize, resume_optimize,
-                       print_importance, GAIN_LEVELS, amp_models_for_levels,
-                       robust_refine)
+from optimizer import (staged_optimize, brute_optimize, fixed_model_optimize,
+                       resume_optimize, print_importance, GAIN_LEVELS,
+                       amp_models_for_levels, robust_refine)
 from apply_preset import (apply_candidate, describe, init_baseline, save_preset,
                           load_preset, NAME_MAX, slot_to_label, parse_slot)
 from tone_loss import tone_distance
@@ -176,8 +176,11 @@ def main():
     ap.add_argument("--stage2-trials", type=int, default=40,
                     help="Stage 2 FX 컴프레서 trials. 0=skip (default 40)")
     ap.add_argument("--stage3-trials", type=int, default=70,
-                    help="Stage 3 MOD 전수 브루트포스 총 trials(스윕+세밀화). 0=skip "
-                         "(default 70)")
+                    help="Stage 3 MOD 총 trials. 전수=스윕+세밀화, --mod-model 지정 시 "
+                         "전부 파라미터 세밀화. 0=skip (default 70)")
+    ap.add_argument("--mod-model", type=int, default=0,
+                    help="Stage 3에서 MOD 모델을 이 번호(1~)로 고정하고 파라미터만 세밀화. "
+                         "귀로 MOD 종류를 아는 경우용. 0=전수 브루트포스 (default 0)")
     ap.add_argument("--play-gain", type=float, default=0.4,
                     help="DI playback gain into FX150. 캡처 클리핑 나면 낮춰라. DI는 "
                          "정규화되니 0.4로 대부분 OK. --calibrate로 자동보정 가능 (default 0.4)")
@@ -210,6 +213,10 @@ def main():
                     help="이전 학습 best(work/songs/<곡>/best_candidate.json)에서 이어서 "
                          "개선. 모델 고정 + 이전값 warm-start로 파라미터만 미세조정 → "
                          "결과가 이전보다 나빠지지 않음(Stage2 생략, 전 체인 포함이라)")
+    ap.add_argument("--mod-only", action="store_true",
+                    help="이전 best를 코어로 통째 고정하고 MOD(Stage 3)만 탐색. Stage 1/2 "
+                         "생략 → 빠름. --mod-model과 함께면 그 MOD 모델 파라미터만. "
+                         "best_candidate.json 필요 (default off)")
     ap.add_argument("--time-limit", type=float, default=None,
                     help="Stage 1 max run time (min). Default=none")
     ap.add_argument("--mock", action="store_true",
@@ -301,14 +308,30 @@ def main():
 
         # ── 이전 결과 이어하기(--resume): 이전 best 모델고정 + 파라미터 개선 ────
         prev_best = None
-        if args.resume and not args.mock:
+        if (args.resume or args.mod_only) and not args.mock:
             try:
                 with open(os.path.join(base, "best_candidate.json"), encoding="utf-8") as f:
                     prev_best = json.load(f).get("candidate")
             except (FileNotFoundError, json.JSONDecodeError):
+                if args.mod_only:
+                    print("[MOD-only] best_candidate.json 없음 → 먼저 일반 학습이 필요합니다.")
+                    return
                 print("[Resume] best_candidate.json 없음 → 일반 학습으로 진행")
 
-        if prev_best:
+        if prev_best and args.mod_only:
+            # MOD-only: 이전 best를 코어로 통째 고정, Stage 1/2 생략, MOD(Stage 3)만 탐색.
+            print(f"\n{'─'*50}")
+            print("[MOD-only] 이전 best 고정 + MOD만 탐색 (Stage 1/2 생략)")
+            print(f"{'─'*50}")
+            print(describe(prev_best))
+            final_best = prev_best
+            final_loss = ev(prev_best)          # 기준 1회 평가(+장치에 이전 best 적용)
+            final_study = None
+            print(f"\n=== 기준(이전 best) loss = {final_loss:.4f} ===")
+            results.append({"label": "이전 best (MOD-only 기준)", "best": prev_best,
+                            "loss": final_loss, "study": None,
+                            "parts": _get_parts(ev, ev.best_rec)})
+        elif prev_best:
             print(f"\n{'─'*50}")
             print(f"[Resume] 이전 best 모델 고정 + 파라미터 개선  {args.trials} trials")
             print(f"{'─'*50}")
@@ -322,6 +345,7 @@ def main():
             results.append({"label": "Resume (이전 best 개선)", "best": best1,
                             "loss": study1.best_value, "study": study1,
                             "parts": _get_parts(ev, ev.best_rec)})
+            final_best, final_loss, final_study = best1, study1.best_value, study1
         else:
             # ── Stage 1: OD / AMP / CAB / EQ ──────────────────────────────────
             n_coarse = max(1, args.trials // 3)
@@ -346,10 +370,7 @@ def main():
                 "study": study1,
                 "parts": _get_parts(ev, ev.best_rec),
             })
-
-        final_best = best1
-        final_loss = study1.best_value
-        final_study = study1
+            final_best, final_loss, final_study = best1, study1.best_value, study1
 
         # ── Stage 2: FX 컴프레서 (resume이면 전 체인 포함이라 생략) ───
         run_stage2 = args.stage2_trials > 0 and not args.mock and not prev_best
@@ -386,17 +407,30 @@ def main():
                 print("\nStage 2 no improvement — keeping previous result")
 
         # ── Stage 3: MOD 전수 브루트포스 (resume이면 생략) ───────────────
-        run_stage3 = args.stage3_trials > 0 and not args.mock and not prev_best
+        run_stage3 = (args.stage3_trials > 0 and not args.mock
+                      and (not prev_best or args.mod_only))
         if run_stage3:
             ev.reset_tracking()   # prev 초기화 → Stage 3 첫 trial이 전 체인 정합 전송
-            cfg3 = _freeze_config(final_best, {STAGE3_CHAIN})
             print(f"\n{'─'*50}")
-            print(f"[Stage 3] MOD 전수 브루트포스  {args.stage3_trials} trials")
-            print(f"{'─'*50}")
-            study3, best3, loss3 = brute_optimize(ev, cfg3, STAGE3_CHAIN,
-                                                  total_trials=args.stage3_trials,
-                                                  repeats=2, progress=True,
-                                                  stage_b_sampler=args.stage_b_sampler)
+            if args.mod_model > 0:
+                # 귀로 MOD 종류를 정함 → 그 모델 고정, 파라미터만 세밀화(전수 생략)
+                cfg3 = _freeze_config(final_best, set())
+                cfg3[STAGE3_CHAIN] = ("fix", args.mod_model)
+                mname = optimizer.SPEC[STAGE3_CHAIN]["models"][args.mod_model - 1]["name"]
+                print(f"[Stage 3] MOD 고정({mname}) 파라미터 세밀화  {args.stage3_trials} trials")
+                print(f"{'─'*50}")
+                study3, best3, loss3 = fixed_model_optimize(
+                    ev, cfg3, STAGE3_CHAIN, args.mod_model,
+                    n_trials=args.stage3_trials, progress=True,
+                    stage_b_sampler=args.stage_b_sampler)
+            else:
+                cfg3 = _freeze_config(final_best, {STAGE3_CHAIN})
+                print(f"[Stage 3] MOD 전수 브루트포스  {args.stage3_trials} trials")
+                print(f"{'─'*50}")
+                study3, best3, loss3 = brute_optimize(ev, cfg3, STAGE3_CHAIN,
+                                                      total_trials=args.stage3_trials,
+                                                      repeats=2, progress=True,
+                                                      stage_b_sampler=args.stage_b_sampler)
             print(f"\n=== Stage 3 best loss = {loss3:.4f} ===")
             print(describe(best3))
 
@@ -417,7 +451,8 @@ def main():
                 print("\nStage 3 no improvement — keeping previous result")
 
         # ── 노이즈 방어: 상위 후보 재평가로 최종 선택(단발 운빨 best 거름) ──────
-        if not args.mock and ev.h is not None and args.robust_topk > 0:
+        if (not args.mock and ev.h is not None and args.robust_topk > 0
+                and final_study is not None):
             print(f"\n[Robust] 상위 {args.robust_topk} 후보 각 {args.robust_repeats}회 "
                   "재평가 → 평균 best 선택", flush=True)
             rb_cand, rb_mean = robust_refine(ev, final_study, top_k=args.robust_topk,
